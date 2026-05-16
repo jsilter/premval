@@ -207,6 +207,29 @@ def _toy_chain_traj(n_frames: int, n_residues: int = 5, seed: int = 0) -> md.Tra
     return md.Trajectory(xyz, top)
 
 
+def make_full_atom_trajectory(
+    n_frames: int, n_residues: int, *, seed: int = 0
+) -> md.Trajectory:
+    """Build a tiny full-atom (N, CA, C, O) trajectory.
+
+    Used by tests that exercise CA selection: every residue gets four
+    backbone atoms so the CA-selection path actually filters, instead of
+    short-circuiting on an already-CA-only topology.
+    """
+    top = md.Topology()
+    chain = top.add_chain()
+    for _ in range(n_residues):
+        res = top.add_residue("ALA", chain)
+        top.add_atom("N", md.element.nitrogen, res)
+        top.add_atom("CA", md.element.carbon, res)
+        top.add_atom("C", md.element.carbon, res)
+        top.add_atom("O", md.element.oxygen, res)
+    rng = np.random.default_rng(seed)
+    n_atoms = n_residues * 4
+    xyz = rng.normal(size=(n_frames, n_atoms, 3)).astype(np.float32)
+    return md.Trajectory(xyz, top)
+
+
 def _write_fake_bundle(
     cache_dir: Path,
     chain: str,
