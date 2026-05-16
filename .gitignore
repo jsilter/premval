@@ -2,6 +2,8 @@ CLAUDE.md
 AGENTS.md
 PLAN.md
 .dev
+.claude
+CODING_STANDARDS.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
