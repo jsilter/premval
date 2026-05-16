@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from premval.viz.matplotlib_renderer import MatplotlibRenderer
-from premval.viz.video import render_trajectory_video
+from premval.viz.video import render_pdbs_video, render_trajectory_video
 
 
 def _toy_traj(n_frames: int = 5, n_residues: int = 10, seed: int = 0) -> md.Trajectory:
@@ -46,4 +46,33 @@ def test_render_trajectory_video(tmp_path: Path) -> None:
     traj = _toy_traj(n_frames=10)
     out = tmp_path / "out.mp4"
     render_trajectory_video(traj, out, fps=10)
+    assert out.exists() and out.stat().st_size > 0
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_render_trajectory_video_honours_frame_order(tmp_path: Path) -> None:
+    traj = _toy_traj(n_frames=10)
+    out = tmp_path / "ordered.mp4"
+    render_trajectory_video(traj, out, fps=10, frame_order=[9, 0, 5])
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_render_trajectory_video_rejects_stride_with_frame_order(tmp_path: Path) -> None:
+    traj = _toy_traj(n_frames=4)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        render_trajectory_video(traj, tmp_path / "x.mp4", stride=2, frame_order=[0, 1])
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_render_pdbs_video_end_to_end(tmp_path: Path) -> None:
+    n = 6
+    pdb_paths: list[Path] = []
+    for i in range(n):
+        traj = _toy_traj(n_frames=1, n_residues=8, seed=i)
+        path = tmp_path / f"frame_{i:03d}.pdb"
+        traj.save_pdb(str(path))
+        pdb_paths.append(path)
+
+    out = tmp_path / "set.mp4"
+    render_pdbs_video(pdb_paths, out, fps=6, reorder=True)
     assert out.exists() and out.stat().st_size > 0
