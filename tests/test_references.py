@@ -8,10 +8,10 @@ import numpy as np
 
 from premval.data.references import (
     ReferenceObservables,
-    _cache_path,
     _compute,
     _load_from_disk,
     _save,
+    cache_path,
     load_reference_observables,
 )
 from tests.test_data import make_full_atom_trajectory
@@ -42,6 +42,7 @@ class TestRoundTrip:
         )
         np.testing.assert_allclose(loaded.ref_mean, obs.ref_mean, atol=1e-6)
         np.testing.assert_allclose(loaded.ref_covar, obs.ref_covar, atol=1e-6)
+        np.testing.assert_allclose(loaded.ref_rmsf, obs.ref_rmsf, atol=1e-6)
         np.testing.assert_allclose(loaded.ref_contact_prob, obs.ref_contact_prob, atol=1e-6)
         np.testing.assert_array_equal(loaded.ca_indices, obs.ca_indices)
 
@@ -55,7 +56,8 @@ class TestRoundTrip:
         assert obs.crystal_xyz_ca.shape == (n_residues, 3)
         assert obs.pca_mean.shape == (n_residues * 3,)
         assert obs.ref_mean.shape == (n_residues, 3)
-        assert obs.ref_covar.shape == (n_residues * 3, n_residues * 3)
+        assert obs.ref_covar.shape == (n_residues, 3, 3)
+        assert obs.ref_rmsf.shape == (n_residues,)
         assert obs.ref_contact_prob.shape == (n_residues, n_residues)
 
     def test_dtypes(self, tmp_path: Path) -> None:
@@ -69,6 +71,7 @@ class TestRoundTrip:
         assert obs.pca_explained_variance.dtype == np.float32
         assert obs.ref_mean.dtype == np.float32
         assert obs.ref_covar.dtype == np.float32
+        assert obs.ref_rmsf.dtype == np.float32
         assert obs.ref_contact_prob.dtype == np.float32
         assert obs.ca_indices.dtype == np.int64
 
@@ -81,12 +84,12 @@ class TestRoundTrip:
 
 class TestCachePath:
     def test_layout(self, tmp_path: Path) -> None:
-        path = _cache_path("6cka_B", "analysis", tmp_path)
+        path = cache_path("6cka_B", "analysis", tmp_path)
         assert path == tmp_path / "references" / "analysis" / "6cka_B.npz"
 
     def test_kind_separates_files(self, tmp_path: Path) -> None:
-        a = _cache_path("x", "analysis", tmp_path)
-        p = _cache_path("x", "protein", tmp_path)
+        a = cache_path("x", "analysis", tmp_path)
+        p = cache_path("x", "protein", tmp_path)
         assert a != p
         assert a.parent != p.parent
 
@@ -94,7 +97,7 @@ class TestCachePath:
 class TestMissingCacheTriggersCompute:
     def test_first_call_creates_cache_file(self, tmp_path: Path) -> None:
         traj = make_full_atom_trajectory(n_frames=25, n_residues=7)
-        path = _cache_path("mychain_A", "analysis", tmp_path)
+        path = cache_path("mychain_A", "analysis", tmp_path)
         assert not path.exists()
 
         with patch("premval.data.references.load_chain_trajectory", return_value=traj):
@@ -119,8 +122,8 @@ class TestMissingCacheTriggersCompute:
         with patch("premval.data.references.load_chain_trajectory", return_value=traj):
             load_reference_observables("chain_A", kind="analysis", cache_dir=tmp_path)
             load_reference_observables("chain_A", kind="protein", cache_dir=tmp_path)
-        assert _cache_path("chain_A", "analysis", tmp_path).exists()
-        assert _cache_path("chain_A", "protein", tmp_path).exists()
+        assert cache_path("chain_A", "analysis", tmp_path).exists()
+        assert cache_path("chain_A", "protein", tmp_path).exists()
 
 
 class TestPCAReprojection:

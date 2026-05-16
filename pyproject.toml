@@ -56,11 +56,11 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["mdtraj", "mdtraj.*"]
+module = ["mdtraj"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["pymol", "pymol.*"]
+module = ["pymol"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -68,5 +68,5 @@ module = ["scipy", "scipy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["sklearn", "sklearn.*"]
+module = ["sklearn.*"]
 ignore_missing_imports = true

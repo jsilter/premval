@@ -18,13 +18,16 @@ from premval.data.atlas import (
     load_chain_trajectory,
     load_val_chains,
 )
+from premval.data.references import ReferenceObservables, load_reference_observables
 
 __all__ = [
     "ATLAS_KINDS",
     "ATLAS_REPLICAS",
     "AtlasKind",
+    "ReferenceObservables",
     "default_cache_dir",
     "fetch_val_split",
     "load_chain_trajectory",
+    "load_reference_observables",
     "load_val_chains",
 ]

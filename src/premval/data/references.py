@@ -21,8 +21,8 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.decomposition import PCA
 
-from premval.data import load_chain_trajectory
-from premval.data.atlas import AtlasKind, default_cache_dir
+from premval.data.atlas import AtlasKind, default_cache_dir, load_chain_trajectory
+from premval.metrics.alphaflow_port import get_mean_covar
 from premval.metrics.panel import ALPHAFLOW_SEED, CONTACT_THRESHOLD_NM
 
 if TYPE_CHECKING:
@@ -37,8 +37,9 @@ class ReferenceObservables:
     pca_components: NDArray[np.float32]
     pca_mean: NDArray[np.float32]
     pca_explained_variance: NDArray[np.float32]
-    ref_mean: NDArray[np.float32]
-    ref_covar: NDArray[np.float32]
+    ref_mean: NDArray[np.float32]  # (n_atoms, 3), nm; per-atom mean over subsample
+    ref_covar: NDArray[np.float32]  # (n_atoms, 3, 3), nm^2; per-atom covar (rmwd input)
+    ref_rmsf: NDArray[np.float32]  # (n_atoms,), A; per-atom RMSF vs crystal frame
     ref_contact_prob: NDArray[np.float32]
 
 
@@ -46,7 +47,7 @@ _N_PCA_COMPONENTS = 50
 _SUBSAMPLE_N = 1000
 
 
-def _cache_path(chain: str, kind: str, cache_dir: Path) -> Path:
+def cache_path(chain: str, kind: str, cache_dir: Path) -> Path:
     return cache_dir / "references" / kind / f"{chain}.npz"
 
 
@@ -62,6 +63,8 @@ def _subsample(arr: NDArray[np.floating], n: int, seed: int) -> NDArray[np.float
 
 
 def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservables:
+    import mdtraj
+
     traj = load_chain_trajectory(chain, kind=kind, cache_dir=cache_dir)
     ca_idx = _ca_indices(traj.topology)
     traj_ca = traj.atom_slice(ca_idx)
@@ -77,13 +80,13 @@ def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservabl
     pca.fit(flat)
 
     sub_xyz = _subsample(ref_xyz, _SUBSAMPLE_N, ALPHAFLOW_SEED)
-    sub_n_frames = sub_xyz.shape[0]
-    ref_mean = sub_xyz.mean(0).astype(np.float32)
-    flat_sub = sub_xyz.reshape(sub_n_frames, n_res * 3)
-    ref_covar = np.cov(flat_sub.T).astype(np.float32)
+    ref_mean, ref_covar = get_mean_covar(sub_xyz)
 
     distmat = np.linalg.norm(sub_xyz[:, None, :] - sub_xyz[:, :, None], axis=-1)
     ref_contact = (distmat < CONTACT_THRESHOLD_NM).mean(0).astype(np.float32)
+
+    # Match panel.rmsf_correlation: ×10 to convert nm → A.
+    ref_rmsf = mdtraj.rmsf(traj_ca, traj_ca[0]) * 10
 
     return ReferenceObservables(
         ca_indices=ca_idx,
@@ -92,8 +95,9 @@ def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservabl
         pca_components=pca.components_.astype(np.float32),
         pca_mean=pca.mean_.astype(np.float32),
         pca_explained_variance=pca.explained_variance_.astype(np.float32),
-        ref_mean=ref_mean,
-        ref_covar=ref_covar,
+        ref_mean=ref_mean.astype(np.float32),
+        ref_covar=ref_covar.astype(np.float32),
+        ref_rmsf=ref_rmsf.astype(np.float32),
         ref_contact_prob=ref_contact,
     )
 
@@ -110,6 +114,7 @@ def _save(obs: ReferenceObservables, path: Path) -> None:
         pca_explained_variance=obs.pca_explained_variance,
         ref_mean=obs.ref_mean,
         ref_covar=obs.ref_covar,
+        ref_rmsf=obs.ref_rmsf,
         ref_contact_prob=obs.ref_contact_prob,
     )
 
@@ -125,6 +130,7 @@ def _load_from_disk(path: Path) -> ReferenceObservables:
         pca_explained_variance=data["pca_explained_variance"],
         ref_mean=data["ref_mean"],
         ref_covar=data["ref_covar"],
+        ref_rmsf=data["ref_rmsf"],
         ref_contact_prob=data["ref_contact_prob"],
     )
 
@@ -141,7 +147,7 @@ def load_reference_observables(
     """
     if cache_dir is None:
         cache_dir = default_cache_dir()
-    path = _cache_path(chain, kind, cache_dir)
+    path = cache_path(chain, kind, cache_dir)
     if path.exists():
         return _load_from_disk(path)
     obs = _compute(chain, kind, cache_dir)
