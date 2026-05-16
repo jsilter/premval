@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Any, cast
 
+import mdtraj as md
+import numpy as np
 import pytest
 import requests
 
 from premval.data import (
     ATLAS_KINDS,
+    ATLAS_REPLICAS,
     default_cache_dir,
     fetch_val_split,
+    load_chain_trajectory,
     load_val_chains,
 )
 from premval.data import atlas as atlas_mod
@@ -188,6 +193,78 @@ def test_fetch_val_split_does_not_close_injected_session(tmp_path: Path) -> None
     session.close = _tracking_close  # type: ignore[method-assign]
     fetch_val_split(tmp_path, chains=["6cka_B"], session=cast(requests.Session, session))
     assert closed["count"] == 0
+
+
+def _toy_chain_traj(n_frames: int, n_residues: int = 5, seed: int = 0) -> md.Trajectory:
+    """Build a tiny CA-only trajectory for synthesizing test bundles."""
+    top = md.Topology()
+    chain = top.add_chain()
+    for _ in range(n_residues):
+        res = top.add_residue("ALA", chain)
+        top.add_atom("CA", md.element.carbon, res)
+    rng = np.random.default_rng(seed)
+    xyz = rng.normal(size=(n_frames, n_residues, 3)).astype(np.float32)
+    return md.Trajectory(xyz, top)
+
+
+def _write_fake_bundle(
+    cache_dir: Path,
+    chain: str,
+    *,
+    kind: atlas_mod.AtlasKind = "analysis",
+    frames_per_replica: tuple[int, int, int] = (3, 4, 5),
+) -> Path:
+    """Synthesize a `{chain}.zip` with `{chain}.pdb` + 3 replica XTCs.
+
+    Each replica gets a distinct frame count so the test can verify
+    join order (R1+R2+R3) rather than relying on a sum that hides it.
+    """
+    bundle_dir = cache_dir / kind
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    bundle = bundle_dir / f"{chain}.zip"
+
+    topology_traj = _toy_chain_traj(n_frames=1, seed=0)
+    staging = cache_dir / "_staging"
+    staging.mkdir(exist_ok=True)
+    pdb_path = staging / f"{chain}.pdb"
+    topology_traj.save_pdb(str(pdb_path))
+
+    xtc_paths: list[Path] = []
+    for replica_idx, n_frames in zip(ATLAS_REPLICAS, frames_per_replica, strict=True):
+        replica = _toy_chain_traj(n_frames=n_frames, seed=replica_idx)
+        xtc_path = staging / f"{chain}_R{replica_idx}.xtc"
+        replica.save_xtc(str(xtc_path))
+        xtc_paths.append(xtc_path)
+
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as zf:
+        zf.write(pdb_path, arcname=pdb_path.name)
+        for xtc_path in xtc_paths:
+            zf.write(xtc_path, arcname=xtc_path.name)
+    return bundle
+
+
+def test_load_chain_trajectory_concatenates_three_replicas(tmp_path: Path) -> None:
+    _write_fake_bundle(tmp_path, "fake_A", frames_per_replica=(3, 4, 5))
+    traj = load_chain_trajectory("fake_A", cache_dir=tmp_path)
+    assert traj.n_frames == 3 + 4 + 5
+    assert traj.topology.n_atoms == 5
+
+
+def test_load_chain_trajectory_missing_bundle_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="not cached"):
+        load_chain_trajectory("nope_A", cache_dir=tmp_path)
+
+
+def test_load_chain_trajectory_missing_xtc_raises(tmp_path: Path) -> None:
+    bundle = _write_fake_bundle(tmp_path, "fake_B")
+    # Rebuild the zip with R3 missing.
+    with zipfile.ZipFile(bundle) as zf:
+        members = {name: zf.read(name) for name in zf.namelist() if not name.endswith("_R3.xtc")}
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    with pytest.raises(KeyError, match="fake_B_R3.xtc"):
+        load_chain_trajectory("fake_B", cache_dir=tmp_path)
 
 
 def test_build_session_mounts_https_adapter() -> None:

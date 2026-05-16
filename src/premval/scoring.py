@@ -1,63 +1,118 @@
-from pathlib import Path
+"""End-to-end scoring: submission ensemble vs ATLAS reference, one target.
 
-import mdtraj
-import numpy as np
-from sklearn.decomposition import PCA
+`score(submission, reference)` is the single function the CLI calls; it
+aligns CA atoms by residue index, superposes onto the reference's first
+frame, and runs the four-metric panel. `score_chain(submission_path,
+chain)` is the path-friendly convenience wrapper.
+
+The v1 panel is CA-only across the board so there is a single alignment
+path (matches AlphaFlow's `--ca_only` mode). Heavy-atom RMSF is an obvious
+fidelity upgrade once the leaderboard is live, but it requires a second
+topology-alignment pass and we deliberately defer that complexity.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from premval.data import load_chain_trajectory
+from premval.io import enforce_ensemble_size, load_ensemble
 from premval.metrics.panel import (
-    ALPHAFLOW_SEED,
-    compute_contact_prob,
-    compute_per_atom_stats,
     contact_jaccard,
     md_pca_w2,
+    rmsf_correlation,
     rmwd,
-    subsample,
 )
-from premval.topology import select_ca_indices, strip_hydrogens
+from premval.topology import select_matched_ca
+
+if TYPE_CHECKING:
+    import mdtraj as md
+
+REFERENCE_SUBSAMPLE = 1000
 
 
 def score(
-    chain: str,
-    submission_xyz: np.ndarray,  # (n_frames, n_residues, 3) CA-only, pre-aligned, nm
-    kind: str = "analysis",
-    cache_dir: Path | None = None,
-) -> dict[str, float]:
+    submission: md.Trajectory,
+    reference: md.Trajectory,
+) -> dict[str, Any]:
+    """Compute the v1 metric panel for one (submission, reference) pair.
+
+    Both trajectories are sliced to their matched CA atoms (by
+    `(chain.index, resSeq)`), superposed onto the reference's first frame,
+    and fed through the four panel metrics. The reference is subsampled to
+    `REFERENCE_SUBSAMPLE` frames inside the moment-based metrics (RMWD,
+    contacts) so per-target compute stays bounded for long MD runs.
+
+    Args:
+        submission: Submission ensemble (any frame count, any atom set
+            that overlaps with the reference at the CA level).
+        reference: Reference ensemble (e.g. ATLAS MD concat). The first
+            frame is used as the crystal/origin for RMSF and contacts.
+
+    Returns:
+        Dict with keys `n_residues`, `n_ref_frames`, `n_sub_frames`, plus
+        the four panel results (`rmsf_pearson`, `rmwd`, `md_pca_w2`,
+        `weak_contacts_jaccard`, `transient_contacts_jaccard`) and the
+        raw RMWD components (`emd_mean_rms`, `emd_var_rms`).
     """
-    Score a submission ensemble against the ATLAS reference for the given chain.
+    ref_ca_idx, sub_ca_idx = select_matched_ca(reference, submission)
+    ref_ca = reference.atom_slice(ref_ca_idx)
+    sub_ca = submission.atom_slice(sub_ca_idx)
+    crystal_ca = ref_ca[0]
 
-    Recomputes all reference observables on every call (expensive).
-    """
-    ref_traj: mdtraj.Trajectory = load_chain_trajectory(chain, kind=kind, cache_dir=cache_dir)
-    ref_traj = strip_hydrogens(ref_traj)
-    ca_idx = select_ca_indices(ref_traj.topology)
-    ref_ca: mdtraj.Trajectory = ref_traj.atom_slice(ca_idx)
+    ref_ca = ref_ca.superpose(crystal_ca)
+    sub_ca = sub_ca.superpose(crystal_ca)
 
-    # Superpose onto first frame (crystal)
-    ref_ca.superpose(ref_ca, frame=0)
-    ref_xyz = ref_ca.xyz.astype(np.float32)  # (n_ref_frames, n_res, 3)
-
-    # PCA on reference
-    n_ref, n_res, _ = ref_xyz.shape
-    flat = ref_xyz.reshape(n_ref, n_res * 3)
-    pca: PCA = PCA(n_components=min(50, n_ref, n_res * 3))
-    pca.fit(flat)
-
-    # 1000-frame subsample for stats
-    sub_xyz = subsample(ref_xyz, n=1000, seed=ALPHAFLOW_SEED)
-    ref_mean, ref_covar = compute_per_atom_stats(sub_xyz)
-    ref_contact = compute_contact_prob(sub_xyz)
-
-    # Score submission
-    sub_mean, sub_covar = compute_per_atom_stats(submission_xyz)
+    rmsf_out = rmsf_correlation(ref_ca, sub_ca, crystal_ca)
+    rmwd_out = rmwd(ref_ca.xyz, sub_ca.xyz, reference_subsample_size=REFERENCE_SUBSAMPLE)
+    md_pca = md_pca_w2(ref_ca.xyz, sub_ca.xyz)
+    contacts = contact_jaccard(
+        ref_ca.xyz,
+        sub_ca.xyz,
+        crystal_ca.xyz[0],
+        reference_subsample_size=REFERENCE_SUBSAMPLE,
+    )
 
     return {
-        "rmwd": rmwd(sub_mean, sub_covar, ref_mean, ref_covar),
-        "md_pca_w2": md_pca_w2(
-            submission_xyz, pca.components_, pca.mean_, pca.explained_variance_
-        ),
-        "contact_jaccard": contact_jaccard(
-            compute_contact_prob(submission_xyz),
-            ref_contact,
-        ),
+        "n_residues": int(ref_ca.n_atoms),
+        "n_ref_frames": int(ref_ca.n_frames),
+        "n_sub_frames": int(sub_ca.n_frames),
+        "rmsf_pearson": float(rmsf_out["rmsf_pearson"]),
+        "emd_mean_rms": rmwd_out["emd_mean_rms"],
+        "emd_var_rms": rmwd_out["emd_var_rms"],
+        "rmwd": rmwd_out["rmwd"],
+        "md_pca_w2": float(md_pca),
+        "weak_contacts_jaccard": contacts["weak_contacts_jaccard"],
+        "transient_contacts_jaccard": contacts["transient_contacts_jaccard"],
     }
+
+
+def score_chain(
+    submission_path: Path | str,
+    chain: str,
+    *,
+    enforce_size: int | None = None,
+    cache_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Convenience: load a submission PDB and ATLAS chain, then score.
+
+    Args:
+        submission_path: Path to a multi-model submission PDB.
+        chain: ATLAS chain identifier (e.g. `6cka_B`); must be cached
+            locally (run `premval fetch` first).
+        enforce_size: If set, require the submission to have exactly this
+            many frames (subsample if larger, reject if smaller).
+        cache_dir: ATLAS cache root. Defaults to `default_cache_dir()`.
+
+    Returns:
+        The same dict as `score`, plus `chain` and `submission_path`.
+    """
+    submission = load_ensemble(submission_path)
+    if enforce_size is not None:
+        submission = enforce_ensemble_size(submission, expected=enforce_size)
+    reference = load_chain_trajectory(chain, cache_dir=cache_dir)
+    result = score(submission, reference)
+    result["chain"] = chain
+    result["submission_path"] = str(submission_path)
+    return result

@@ -16,18 +16,24 @@ from __future__ import annotations
 
 import csv
 import logging
+import tempfile
 import time
+import zipfile
 from collections.abc import Iterable
 from importlib import resources
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+if TYPE_CHECKING:
+    import mdtraj as md
+
 AtlasKind = Literal["analysis", "protein", "total"]
 ATLAS_KINDS: tuple[AtlasKind, ...] = ("analysis", "protein", "total")
+ATLAS_REPLICAS: tuple[int, int, int] = (1, 2, 3)
 
 _API_BASE = "https://www.dsimb.inserm.fr/ATLAS/api"
 _VAL_CSV = "atlas_val.csv"
@@ -180,3 +186,62 @@ def fetch_val_split(
     finally:
         if owned_session:
             sess.close()
+
+
+def load_chain_trajectory(
+    chain: str,
+    *,
+    kind: AtlasKind = "analysis",
+    cache_dir: Path | None = None,
+) -> md.Trajectory:
+    """Load a cached ATLAS bundle as one concatenated `mdtraj.Trajectory`.
+
+    The bundle ships a topology PDB and three replica XTCs
+    (`{chain}.pdb`, `{chain}_R{1,2,3}.xtc`). This loader extracts those
+    files to a temp directory, loads each replica against the shared
+    topology, and concatenates R1+R2+R3 in order (matching AlphaFlow's
+    `prep_atlas.py` pattern). The topology PDB is used for atom/residue
+    metadata only, never as a frame.
+
+    Args:
+        chain: PDB chain identifier such as `6cka_B`.
+        kind: ATLAS payload tier; must match the cached bundle's tier.
+        cache_dir: Root cache directory. Defaults to `default_cache_dir()`.
+
+    Returns:
+        A single trajectory with `n_frames` equal to the sum of frames
+        across the three replicas (1000 each for `analysis`, 10000 each
+        for `protein`/`total`).
+
+    Raises:
+        FileNotFoundError: If the chain bundle is not cached locally;
+            call `fetch_val_split` first.
+        KeyError: If the bundle is missing the topology PDB or any
+            replica XTC.
+    """
+    import mdtraj as md
+
+    root = cache_dir or default_cache_dir()
+    bundle = _bundle_path(root, kind, chain)
+    if not bundle.exists():
+        raise FileNotFoundError(
+            f"ATLAS bundle not cached at {bundle}; run fetch_val_split(chains=[{chain!r}])"
+        )
+
+    topology_name = f"{chain}.pdb"
+    replica_names = [f"{chain}_R{r}.xtc" for r in ATLAS_REPLICAS]
+
+    with zipfile.ZipFile(bundle) as zf, tempfile.TemporaryDirectory() as tmp:
+        members = set(zf.namelist())
+        for name in (topology_name, *replica_names):
+            if name not in members:
+                raise KeyError(f"{bundle}: missing expected member {name!r}")
+        tmpdir = Path(tmp)
+        zf.extract(topology_name, tmpdir)
+        for name in replica_names:
+            zf.extract(name, tmpdir)
+
+        topology = md.load(str(tmpdir / topology_name)).topology
+        replicas = [md.load(str(tmpdir / name), top=topology) for name in replica_names]
+
+    return md.join(replicas, check_topology=True)

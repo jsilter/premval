@@ -11,16 +11,20 @@ without a runtime dependency on GitHub.
 
 from premval.data.atlas import (
     ATLAS_KINDS,
+    ATLAS_REPLICAS,
     AtlasKind,
     default_cache_dir,
     fetch_val_split,
+    load_chain_trajectory,
     load_val_chains,
 )
 
 __all__ = [
     "ATLAS_KINDS",
+    "ATLAS_REPLICAS",
     "AtlasKind",
     "default_cache_dir",
     "fetch_val_split",
+    "load_chain_trajectory",
     "load_val_chains",
 ]
