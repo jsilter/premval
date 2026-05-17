@@ -24,6 +24,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import numpy as np
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -245,3 +246,79 @@ def load_chain_trajectory(
         replicas = [md.load(str(tmpdir / name), top=topology) for name in replica_names]
 
     return md.join(replicas, check_topology=True)
+
+
+def load_topology_bytes(
+    chain: str,
+    *,
+    kind: AtlasKind = "analysis",
+    cache_dir: Path | None = None,
+) -> bytes:
+    """Return the raw `{chain}.pdb` bytes from a cached ATLAS bundle.
+
+    Byte-level access to the topology PDB without the mdtraj round-trip
+    that `load_chain_trajectory` does. Used by the web app to stream the
+    static structure straight to the browser.
+
+    Args:
+        chain: PDB chain identifier such as `6cka_B`.
+        kind: ATLAS payload tier; must match the cached bundle's tier.
+        cache_dir: Root cache directory. Defaults to `default_cache_dir()`.
+
+    Returns:
+        Topology PDB contents as raw bytes.
+
+    Raises:
+        FileNotFoundError: If the chain bundle is not cached locally.
+        KeyError: If the bundle is missing the topology PDB member.
+    """
+    root = cache_dir or default_cache_dir()
+    bundle = _bundle_path(root, kind, chain)
+    if not bundle.exists():
+        raise FileNotFoundError(
+            f"ATLAS bundle not cached at {bundle}; run fetch_val_split(chains=[{chain!r}])"
+        )
+    topology_name = f"{chain}.pdb"
+    with zipfile.ZipFile(bundle) as zf:
+        if topology_name not in zf.namelist():
+            raise KeyError(f"{bundle}: missing expected member {topology_name!r}")
+        return zf.read(topology_name)
+
+
+def load_ensemble_pdb_bytes(
+    chain: str,
+    *,
+    kind: AtlasKind = "analysis",
+    cache_dir: Path | None = None,
+    max_frames: int = 250,
+) -> bytes:
+    """Return multi-model PDB bytes for a chain trajectory, subsampled.
+
+    Loads via `load_chain_trajectory`, deterministically subsamples to at
+    most `max_frames` (matches the leaderboard's 250-frame ensemble
+    contract), and writes to a tempfile via `traj.save_pdb`. The result
+    is a single PDB blob the browser can stream and an NGL viewer can
+    play as a trajectory.
+
+    Args:
+        chain: PDB chain identifier.
+        kind: ATLAS payload tier; must match the cached bundle.
+        cache_dir: Root cache directory. Defaults to `default_cache_dir()`.
+        max_frames: Cap on the number of MODEL records in the output.
+            Subsampling uses `np.random.default_rng(0)` for reproducibility.
+
+    Returns:
+        Multi-model PDB contents as raw bytes.
+
+    Raises:
+        FileNotFoundError: If the chain bundle is not cached locally.
+    """
+    traj = load_chain_trajectory(chain, kind=kind, cache_dir=cache_dir)
+    if traj.n_frames > max_frames:
+        rng = np.random.default_rng(0)
+        idx = np.sort(rng.choice(traj.n_frames, size=max_frames, replace=False))
+        traj = traj[idx]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / f"{chain}.pdb"
+        traj.save_pdb(str(out))
+        return out.read_bytes()

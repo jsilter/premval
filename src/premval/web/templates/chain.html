@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ active_chain }} - premval{% endblock %}
+{% block content %}
+<h2>{{ active_chain }}</h2>
+<p>
+  Reference trajectory from ATLAS (subsampled to 250 frames).
+  Use NGL's playback controls (bottom-right of the viewport) to scrub through
+  the ensemble.
+  <a href="{{ topology_url }}" download>topology.pdb</a> &middot;
+  <a href="{{ ensemble_url }}" download>ensemble.pdb</a>
+</p>
+<div id="viewport" style="width:100%;height:640px;background:white;border:1px solid #ddd"></div>
+<script src="https://unpkg.com/ngl@2.3.1/dist/ngl.js"></script>
+<script>
+  const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
+  stage.loadFile({{ ensemble_url | tojson }}, {ext: "pdb", asTrajectory: true})
+       .then(c => {
+         c.addRepresentation("cartoon");
+         c.autoView();
+         c.addTrajectory();
+       });
+  addEventListener("resize", () => stage.handleResize());
+</script>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard - premval{% endblock %}
+{% block content %}
+<h2>Leaderboard</h2>
+<p>Per-chain metrics across submitted models. No submissions scored yet;
+pick a chain on the left to view its ATLAS reference trajectory.</p>
+<table class="lb">
+  <thead>
+    <tr>
+      <th>model</th>
+      <th>chain</th>
+      <th>rmsf_pearson</th>
+      <th>rmwd</th>
+      <th>md_pca_w2</th>
+      <th>weak_jaccard</th>
+      <th>transient_jaccard</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td colspan="7" class="empty">no scored submissions yet</td></tr>
+  </tbody>
+</table>
+{% endblock %}

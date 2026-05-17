@@ -15,6 +15,8 @@ from premval.data import (
     default_cache_dir,
     fetch_val_split,
     load_chain_trajectory,
+    load_ensemble_pdb_bytes,
+    load_topology_bytes,
     load_val_chains,
 )
 from premval.data import atlas as atlas_mod
@@ -288,6 +290,47 @@ def test_load_chain_trajectory_missing_xtc_raises(tmp_path: Path) -> None:
             zf.writestr(name, data)
     with pytest.raises(KeyError, match="fake_B_R3.xtc"):
         load_chain_trajectory("fake_B", cache_dir=tmp_path)
+
+
+def test_load_topology_bytes_returns_pdb_member(tmp_path: Path) -> None:
+    _write_fake_bundle(tmp_path, "fake_C")
+    raw = load_topology_bytes("fake_C", cache_dir=tmp_path)
+    # mdtraj-saved PDBs start with REMARK/CRYST1/HEADER (or ATOM if the
+    # topology had no metadata, as our synthetic bundles do).
+    head = raw[:80].decode("ascii")
+    assert head.startswith(("REMARK", "CRYST1", "MODEL", "HEADER", "ATOM"))
+
+
+def test_load_topology_bytes_missing_bundle_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="not cached"):
+        load_topology_bytes("nope_A", cache_dir=tmp_path)
+
+
+def test_load_topology_bytes_missing_member_raises(tmp_path: Path) -> None:
+    bundle = _write_fake_bundle(tmp_path, "fake_D")
+    # Drop the topology PDB, keep the XTCs.
+    with zipfile.ZipFile(bundle) as zf:
+        members = {name: zf.read(name) for name in zf.namelist() if not name.endswith(".pdb")}
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    with pytest.raises(KeyError, match="fake_D.pdb"):
+        load_topology_bytes("fake_D", cache_dir=tmp_path)
+
+
+def test_load_ensemble_pdb_bytes_caps_frames(tmp_path: Path) -> None:
+    _write_fake_bundle(tmp_path, "fake_E", frames_per_replica=(20, 20, 20))  # 60 frames total
+    raw = load_ensemble_pdb_bytes("fake_E", cache_dir=tmp_path, max_frames=10)
+    text = raw.decode("ascii")
+    # mdtraj writes one "MODEL ..." line per frame in multi-model PDB.
+    assert text.count("\nMODEL ") + text.startswith("MODEL ") == 10
+
+
+def test_load_ensemble_pdb_bytes_passes_through_small_traj(tmp_path: Path) -> None:
+    _write_fake_bundle(tmp_path, "fake_F", frames_per_replica=(2, 3, 4))  # 9 frames total
+    raw = load_ensemble_pdb_bytes("fake_F", cache_dir=tmp_path, max_frames=250)
+    text = raw.decode("ascii")
+    assert text.count("\nMODEL ") + text.startswith("MODEL ") == 9
 
 
 def test_build_session_mounts_https_adapter() -> None:

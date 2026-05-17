@@ -16,6 +16,8 @@ from premval.data.atlas import (
     default_cache_dir,
     fetch_val_split,
     load_chain_trajectory,
+    load_ensemble_pdb_bytes,
+    load_topology_bytes,
     load_val_chains,
 )
 from premval.data.references import ReferenceObservables, load_reference_observables
@@ -28,6 +30,8 @@ __all__ = [
     "default_cache_dir",
     "fetch_val_split",
     "load_chain_trajectory",
+    "load_ensemble_pdb_bytes",
     "load_reference_observables",
+    "load_topology_bytes",
     "load_val_chains",
 ]

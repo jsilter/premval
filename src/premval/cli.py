@@ -1,6 +1,6 @@
 """`premval` command-line entry point.
 
-Three subcommands:
+Subcommands:
 
 - `premval fetch [--chains ...] [--kind ...]`: download ATLAS bundles
   into the local cache.
@@ -10,6 +10,7 @@ Three subcommands:
 - `premval prepare-refs [--chains ...] [--kind ...]`: precompute the
   per-target reference-observables cache (CA xyz, PCA, moments, contact
   prob, RMSF) for the val split or a chain list. Run after `fetch`.
+- `premval serve`: run the FastAPI dashboard (requires the `[web]` extra).
 
 The CLI is intentionally thin; orchestration logic lives in `scoring.py`
 and `data.atlas` so it stays unit-testable without invoking argparse.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -47,6 +49,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_score(args)
     if args.command == "prepare-refs":
         return _cmd_prepare_refs(args)
+    if args.command == "serve":
+        return _cmd_serve(args)
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover - argparse guards
 
 
@@ -95,6 +99,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ATLAS payload tier (default: analysis)",
     )
     prep.add_argument("--cache-dir", type=Path, default=None)
+
+    serve = sub.add_parser("serve", help="run the FastAPI dashboard (requires [web] extra)")
+    serve.add_argument("--host", default="127.0.0.1", help="bind host (default: 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
+    serve.add_argument("--cache-dir", type=Path, default=None)
+    serve.add_argument(
+        "--kind",
+        choices=ATLAS_KINDS,
+        default="analysis",
+        help="ATLAS payload tier (default: analysis)",
+    )
+    serve.add_argument("--reload", action="store_true", help="auto-reload on code change")
     return parser
 
 
@@ -118,6 +134,31 @@ def _cmd_prepare_refs(args: argparse.Namespace) -> int:
     for chain in chains:
         load_reference_observables(chain, kind=kind, cache_dir=cache_dir)
         print(f"{chain}\t{cache_path(chain, kind, cache_dir)}")
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:
+        sys.stderr.write(
+            "the `serve` subcommand requires the [web] extra; "
+            "install with: pip install -e '.[web]'\n"
+        )
+        raise SystemExit(2) from exc
+
+    # Env vars (not factory kwargs) so reload subprocesses inherit them.
+    if args.cache_dir is not None:
+        os.environ["PREMVAL_CACHE_DIR"] = str(args.cache_dir)
+    os.environ["PREMVAL_KIND"] = args.kind
+
+    uvicorn.run(
+        "premval.web.app:create_app",
+        host=args.host,
+        port=args.port,
+        factory=True,
+        reload=args.reload,
+    )
     return 0
 
 
