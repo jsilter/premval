@@ -71,7 +71,8 @@ def load_val_chains() -> list[str]:
     return [row["name"] for row in reader]
 
 
-def _bundle_path(cache_dir: Path, kind: AtlasKind, chain: str) -> Path:
+def bundle_path(cache_dir: Path, kind: AtlasKind, chain: str) -> Path:
+    """Path to a cached ATLAS bundle: `{cache_dir}/{kind}/{chain}.zip`."""
     return cache_dir / kind / f"{chain}.zip"
 
 
@@ -176,7 +177,7 @@ def fetch_val_split(
     try:
         results: dict[str, Path] = {}
         for index, chain in enumerate(targets, start=1):
-            path = _bundle_path(root, kind, chain)
+            path = bundle_path(root, kind, chain)
             if not force and path.exists():
                 _LOG.info("[%d/%d] %s: cached", index, len(targets), chain)
             else:
@@ -223,7 +224,7 @@ def load_chain_trajectory(
     import mdtraj as md
 
     root = cache_dir or default_cache_dir()
-    bundle = _bundle_path(root, kind, chain)
+    bundle = bundle_path(root, kind, chain)
     if not bundle.exists():
         raise FileNotFoundError(
             f"ATLAS bundle not cached at {bundle}; run fetch_val_split(chains=[{chain!r}])"
@@ -273,7 +274,7 @@ def load_topology_bytes(
         KeyError: If the bundle is missing the topology PDB member.
     """
     root = cache_dir or default_cache_dir()
-    bundle = _bundle_path(root, kind, chain)
+    bundle = bundle_path(root, kind, chain)
     if not bundle.exists():
         raise FileNotFoundError(
             f"ATLAS bundle not cached at {bundle}; run fetch_val_split(chains=[{chain!r}])"

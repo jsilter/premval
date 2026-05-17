@@ -3,11 +3,11 @@
 Two pages and two byte-streaming endpoints:
 
 - `GET /` (leaderboard): placeholder table (no scored submissions yet) plus
-  a sidebar of the 39 val-split chains, each linking to its viewer page.
+  a sidebar of the 39 val-split chains as a browse menu.
 - `GET /chain/{chain}`: NGL Viewer with playback for a chain's reference
-  trajectory (subsampled to 250 frames).
-- `GET /api/chain/{chain}/topology.pdb`: raw topology PDB bytes from the
-  cached ATLAS bundle.
+  trajectory (subsampled to 250 frames). Accepts any chain whose bundle
+  is in the cache (not restricted to the val split).
+- `GET /api/chain/{chain}/topology.pdb`: raw topology PDB bytes.
 - `GET /api/chain/{chain}/ensemble.pdb`: multi-model PDB bytes (subsampled
   reference trajectory) for NGL's trajectory player.
 
@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 
 from premval.data import (
     AtlasKind,
+    bundle_path,
     default_cache_dir,
     load_ensemble_pdb_bytes,
     load_topology_bytes,
@@ -84,12 +85,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.val_chains = frozenset(load_val_chains())
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
-    def _check_known(chain: str) -> None:
-        if chain not in app.state.val_chains:
-            raise HTTPException(
-                status_code=404,
-                detail=f"chain {chain!r} not in the val split",
+    def _require_cached(chain: str, settings: Settings) -> None:
+        """Raise 404 if `chain` has no cached ATLAS bundle.
+
+        The viewer accepts any chain ATLAS knows about (not restricted to
+        the val split). The val split is meaningful for the leaderboard
+        sidebar, but for the viewer the only thing that matters is whether
+        we have the bytes on disk.
+        """
+        if not bundle_path(settings.cache_dir, settings.kind, chain).exists():
+            hint = (
+                f"run: premval fetch --chains {chain}"
+                if chain in app.state.val_chains
+                else f"chain {chain!r} is not cached locally"
             )
+            raise HTTPException(status_code=404, detail=f"no cached bundle; {hint}")
 
     @app.get("/", response_class=HTMLResponse)
     def leaderboard(request: Request, _settings: SettingsDep) -> HTMLResponse:
@@ -100,8 +110,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(request, "leaderboard.html", ctx)
 
     @app.get("/chain/{chain}", response_class=HTMLResponse)
-    def chain_page(chain: str, request: Request, _settings: SettingsDep) -> HTMLResponse:
-        _check_known(chain)
+    def chain_page(chain: str, request: Request, settings: SettingsDep) -> HTMLResponse:
+        _require_cached(chain, settings)
         ctx: dict[str, Any] = {
             "chains": sorted(app.state.val_chains),
             "active_chain": chain,
@@ -112,26 +122,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/chain/{chain}/topology.pdb")
     def topology_bytes(chain: str, settings: SettingsDep) -> Response:
-        _check_known(chain)
-        try:
-            data = load_topology_bytes(chain, kind=settings.kind, cache_dir=settings.cache_dir)
-        except FileNotFoundError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"bundle not fetched; run: premval fetch --chains {chain}",
-            ) from exc
+        _require_cached(chain, settings)
+        data = load_topology_bytes(chain, kind=settings.kind, cache_dir=settings.cache_dir)
         return Response(content=data, media_type="chemical/x-pdb")
 
     @app.get("/api/chain/{chain}/ensemble.pdb")
     def ensemble_bytes(chain: str, settings: SettingsDep) -> Response:
-        _check_known(chain)
-        try:
-            data = load_ensemble_pdb_bytes(chain, kind=settings.kind, cache_dir=settings.cache_dir)
-        except FileNotFoundError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"bundle not fetched; run: premval fetch --chains {chain}",
-            ) from exc
+        _require_cached(chain, settings)
+        data = load_ensemble_pdb_bytes(chain, kind=settings.kind, cache_dir=settings.cache_dir)
         return Response(content=data, media_type="chemical/x-pdb")
 
     return app
