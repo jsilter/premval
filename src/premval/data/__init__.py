@@ -33,7 +33,9 @@ from premval.data.samples import (
     available_chains,
     available_models,
     default_samples_dir,
+    load_sample_observables,
     load_sample_pdb_bytes,
+    sample_observables_path,
     sample_path,
 )
 
@@ -57,9 +59,11 @@ __all__ = [
     "load_chain_trajectory",
     "load_ensemble_pdb_bytes",
     "load_reference_observables",
+    "load_sample_observables",
     "load_sample_pdb_bytes",
     "load_test_chains",
     "load_topology_bytes",
     "load_val_chains",
+    "sample_observables_path",
     "sample_path",
 ]

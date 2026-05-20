@@ -4,24 +4,23 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import mdtraj as md
 import numpy as np
 
 from premval.data.references import (
     ReferenceObservables,
-    _compute,
-    _load_from_disk,
-    _save,
     cache_path,
+    compute_observables_from_traj,
+    load_observables,
     load_reference_observables,
+    save_observables,
 )
 from tests.test_data import make_full_atom_trajectory
 
 
-def _make_obs_from_traj(traj: object, tmp_path: Path) -> ReferenceObservables:
-    """Compute reference observables from a trajectory using the real compute pipeline."""
-    with patch("premval.data.references.load_chain_trajectory", return_value=traj):
-        obs = _compute("test_A", "analysis", tmp_path)
-    return obs
+def _make_obs_from_traj(traj: md.Trajectory, tmp_path: Path) -> ReferenceObservables:
+    """Compute reference observables straight from a trajectory."""
+    return compute_observables_from_traj(traj)
 
 
 class TestRoundTrip:
@@ -30,8 +29,8 @@ class TestRoundTrip:
         obs = _make_obs_from_traj(traj, tmp_path)
 
         path = tmp_path / "obs.npz"
-        _save(obs, path)
-        loaded = _load_from_disk(path)
+        save_observables(obs, path)
+        loaded = load_observables(path)
 
         np.testing.assert_allclose(loaded.ref_xyz_ca, obs.ref_xyz_ca, atol=1e-6)
         np.testing.assert_allclose(loaded.crystal_xyz_ca, obs.crystal_xyz_ca, atol=1e-6)
@@ -78,7 +77,7 @@ class TestRoundTrip:
     def test_save_creates_parent_dirs(self, tmp_path: Path) -> None:
         obs = _make_obs_from_traj(make_full_atom_trajectory(n_frames=20, n_residues=5), tmp_path)
         nested = tmp_path / "a" / "b" / "obs.npz"
-        _save(obs, nested)
+        save_observables(obs, nested)
         assert nested.exists()
 
 

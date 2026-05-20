@@ -145,76 +145,22 @@
 </details>
 <script src="https://unpkg.com/ngl@2.3.1/dist/ngl.js"></script>
 <script>
-  const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
-  const overlay = document.getElementById("overlay");
+  // ===================== premval chain viewer =====================
+  // Two NGL panes: left = ATLAS MD reference, right = a generated model's
+  // sample ensemble (when cached). ONE set of controls drives BOTH panes:
+  //   - playback: play/pause, speed, smooth (spline interpolation), slider
+  //   - overlays: flexibility, contacts, ellipsoids, PCA mode
+  // Each pane computes its overlays from its OWN ensemble's observables, so
+  // the two are directly comparable. A "pane" bundles its stage, structure,
+  // trajectory, player, and overlay state; the shared widgets fan out over
+  // the list of loaded panes.
+
+  // ---- DOM ----
   const playBtn = document.getElementById("playBtn");
   const speedSel = document.getElementById("speedSel");
   const slider = document.getElementById("frameSlider");
   const label = document.getElementById("frameLabel");
   const smoothChk = document.getElementById("smoothChk");
-  const BASE_TIMEOUT_MS = 80;  // 1x speed
-  stage.loadFile({{ ensemble_url | tojson }}, {ext: "pdb", asTrajectory: true})
-       .then(c => {
-         const cartoonRep = c.addRepresentation("cartoon");
-         c.autoView();
-         const trajComp = c.addTrajectory();
-         const traj = trajComp.trajectory;
-         const update = () => {
-           slider.max = traj.frameCount - 1;
-           slider.value = traj.currentFrame;
-           label.textContent = (traj.currentFrame + 1) + " / " + traj.frameCount;
-         };
-         traj.signals.frameChanged.add(update);
-         traj.signals.countChanged.add(update);
-         const player = new NGL.TrajectoryPlayer(traj, {
-           step: 1, timeout: BASE_TIMEOUT_MS, mode: "loop", direction: "forward",
-           interpolateType: "spline", interpolateStep: 5,
-         });
-         speedSel.onchange = () => {
-           player.setParameters({timeout: BASE_TIMEOUT_MS / parseFloat(speedSel.value)});
-         };
-         smoothChk.onchange = () => {
-           player.setParameters({interpolateType: smoothChk.checked ? "spline" : ""});
-         };
-         let playing = false;
-         playBtn.onclick = () => {
-           playing = !playing;
-           if (playing) { player.play(); playBtn.textContent = "pause"; }
-           else { player.pause(); playBtn.textContent = "play"; }
-         };
-         slider.oninput = () => {
-           if (playing) { player.pause(); playing = false; playBtn.textContent = "play"; }
-           traj.setFrame(parseInt(slider.value, 10));
-         };
-         playBtn.disabled = false;
-         slider.disabled = false;
-         speedSel.disabled = false;
-         smoothChk.disabled = false;
-         update();
-         overlay.style.display = "none";
-         // Restore player prefs (speed, smooth) now that the controls are live.
-         if (savedPrefs.speed !== undefined) {
-           speedSel.value = savedPrefs.speed;
-           speedSel.dispatchEvent(new Event("change"));
-         }
-         if (savedPrefs.smooth !== undefined && smoothChk.checked !== savedPrefs.smooth) {
-           smoothChk.checked = savedPrefs.smooth;
-           smoothChk.dispatchEvent(new Event("change"));
-         }
-         setupOverlays(c, traj, cartoonRep, player,
-                       () => playing, (v) => { playing = v; });
-       })
-       .catch(err => {
-         overlay.textContent = "load failed: " + err;
-         overlay.style.color = "#b00";
-         console.error(err);
-       });
-  addEventListener("resize", () => stage.handleResize());
-
-  // -------- ensemble overlays (flexibility, contacts, ellipsoids, PCA) --------
-  // Fetches the precomputed per-chain reference observables and wires the
-  // four toggle widgets. If the .npz cache is missing on the server, the
-  // toggles stay disabled and we show a hint pointing at `prepare-refs`.
   const flexChk = document.getElementById("flexChk");
   const contactsChk = document.getElementById("contactsChk");
   const contactsThresh = document.getElementById("contactsThresh");
@@ -226,8 +172,25 @@
   const pcaChk = document.getElementById("pcaChk");
   const pcaMode = document.getElementById("pcaMode");
   const overlayHint = document.getElementById("overlayHint");
+  const modelSel = document.getElementById("modelSel");   // null if no samples
+  const BASE_TIMEOUT_MS = 80;  // 1x speed
 
-  // ----- preference persistence (localStorage; survives chain navigation) -----
+  const panes = [];       // loaded panes (each may still be fetching overlays)
+  let playing = false;
+  let dmaxTimer = null;
+
+  function caPos(structure, ca) {
+    const s = structure.atomStore;
+    return [s.x[ca], s.y[ca], s.z[ca]];
+  }
+  function colorForSeparation(sep) {
+    // |i-j| -> pale yellow (near in sequence) ... red (far / tertiary)
+    const t = Math.min(1, Math.max(0, (sep - 2) / 28));
+    return [1, 0.9 - 0.8 * t, 0.4 - 0.4 * t];
+  }
+  function dmaxNm() { return parseFloat(contactsDmax.value) / 10; }
+
+  // ---- preference persistence (localStorage; survives chain navigation) ----
   const PREFS_KEY = "premval.chainSettings";
   const savedPrefs = (() => {
     try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "null") || {}; }
@@ -236,18 +199,15 @@
   function persistPrefs() {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
-        flex: flexChk.checked,
-        contacts: contactsChk.checked,
+        flex: flexChk.checked, contacts: contactsChk.checked,
         contactsDmax: parseFloat(contactsDmax.value),
         contactsThresh: parseFloat(contactsThresh.value),
         ellipsoids: ellipsoidsChk.checked,
         ellipsoidsScale: parseFloat(ellipsoidsScale.value),
-        pca: pcaChk.checked,
-        pcaMode: pcaMode.value,
-        smooth: smoothChk.checked,
-        speed: speedSel.value,
+        pca: pcaChk.checked, pcaMode: pcaMode.value,
+        smooth: smoothChk.checked, speed: speedSel.value,
       }));
-    } catch (e) { /* storage disabled or quota exceeded; silently skip */ }
+    } catch (e) { /* storage disabled or quota exceeded; skip */ }
   }
   for (const el of [flexChk, contactsChk, contactsDmax, contactsThresh,
                     ellipsoidsChk, ellipsoidsScale, pcaChk, pcaMode,
@@ -256,35 +216,217 @@
     if (el.type === "range") el.addEventListener("input", persistPrefs);
   }
 
-  function caPos(structure, ca) {
-    const s = structure.atomStore;
-    return [s.x[ca], s.y[ca], s.z[ca]];
+  // ---- restore widget VALUES up front so panes inherit them on load ----
+  if (savedPrefs.speed !== undefined) speedSel.value = savedPrefs.speed;
+  if (savedPrefs.smooth !== undefined) smoothChk.checked = savedPrefs.smooth;
+  if (savedPrefs.contactsThresh !== undefined) contactsThresh.value = savedPrefs.contactsThresh;
+  if (savedPrefs.contactsDmax !== undefined) contactsDmax.value = savedPrefs.contactsDmax;
+  if (savedPrefs.ellipsoidsScale !== undefined) ellipsoidsScale.value = savedPrefs.ellipsoidsScale;
+  if (savedPrefs.pcaMode !== undefined) pcaMode.value = savedPrefs.pcaMode;
+  contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
+  contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
+
+  // ============================== pane ==============================
+  function makePane(stage, structureUrl, observablesUrl, overlayEl, isReference) {
+    const pane = {
+      stage, observablesUrl, overlayEl, isReference,
+      comp: null, traj: null, player: null, cartoonRep: null,
+      obs: null, flexRep: null, contactsList: null, contactsComp: null,
+      ellipsoidsComp: null, rmin: 0, rmax: 1, pcaRaf: null,
+      contactsRebuildScheduled: false, ellipsoidsRebuildScheduled: false,
+      dmaxFetchSeq: 0,
+    };
+
+    pane.applyPlayerParams = function () {
+      if (!pane.player) return;
+      pane.player.setParameters({
+        timeout: BASE_TIMEOUT_MS / parseFloat(speedSel.value),
+        interpolateType: smoothChk.checked ? "spline" : "",
+      });
+    };
+    pane.setFrame = function (f) {
+      if (pane.traj && f < pane.traj.frameCount) pane.traj.setFrame(f);
+    };
+    pane.setFlex = function (on) {
+      if (!pane.flexRep) return;
+      pane.flexRep.setVisibility(on);
+      pane.cartoonRep.setVisibility(!on);
+    };
+
+    pane.rebuildContacts = function () {
+      if (pane.contactsComp) { pane.stage.removeComponent(pane.contactsComp); pane.contactsComp = null; }
+      if (!contactsChk.checked || !pane.obs) return;
+      const thr = parseFloat(contactsThresh.value);
+      const shape = new NGL.Shape("contacts");
+      let count = 0;
+      for (const ct of pane.contactsList) {        // sorted desc by prob
+        if (ct.p < thr) break;
+        shape.addCylinder(caPos(pane.comp.structure, pane.obs.ca_indices[ct.i]),
+                          caPos(pane.comp.structure, pane.obs.ca_indices[ct.j]),
+                          colorForSeparation(ct.j - ct.i), 0.1 + 0.3 * ct.p);
+        count++;
+      }
+      if (count === 0) return;
+      pane.contactsComp = pane.stage.addComponentFromObject(shape);
+      pane.contactsComp.addRepresentation("buffer");
+    };
+    pane.refetchContacts = function () {
+      if (!pane.obs) return;                       // recompute prob matrix at new dmax
+      const seq = ++pane.dmaxFetchSeq;
+      fetch(pane.observablesUrl + "?dmax_nm=" + dmaxNm())
+        .then(r => r.json()).then(o => {
+          if (seq !== pane.dmaxFetchSeq) return;    // superseded by a newer drag
+          pane.contactsList = o.contacts;
+          if (contactsChk.checked) pane.rebuildContacts();
+        }).catch(e => console.warn("contacts refetch failed:", e));
+    };
+
+    pane.rebuildEllipsoids = function () {
+      if (pane.ellipsoidsComp) { pane.stage.removeComponent(pane.ellipsoidsComp); pane.ellipsoidsComp = null; }
+      if (!ellipsoidsChk.checked || !pane.obs) return;
+      const scale = parseFloat(ellipsoidsScale.value) * 10;  // nm -> A
+      const shape = new NGL.Shape("ellipsoids");
+      const o = pane.obs;
+      for (let r = 0; r < o.n_residues; r++) {
+        const e = o.ellipsoids[r];
+        const pos = caPos(pane.comp.structure, e.ca);
+        const t = (o.rmsf[r] - pane.rmin) / Math.max(pane.rmax - pane.rmin, 1e-6);
+        const color = [t, 0.3, 1 - t];
+        const major = [e.axes[0][0]*e.lengths[0]*scale, e.axes[0][1]*e.lengths[0]*scale, e.axes[0][2]*e.lengths[0]*scale];
+        const minor = [e.axes[1][0]*e.lengths[1]*scale, e.axes[1][1]*e.lengths[1]*scale, e.axes[1][2]*e.lengths[1]*scale];
+        shape.addEllipsoid(pos, color, e.lengths[2]*scale, major, minor);
+      }
+      pane.ellipsoidsComp = pane.stage.addComponentFromObject(shape);
+      pane.ellipsoidsComp.addRepresentation("buffer");
+    };
+
+    // Contacts/ellipsoids are built from current CA positions; rebuild as
+    // they move during playback/PCA. Coalesce via rAF so rapid frameChanged
+    // signals trigger one rebuild per repaint.
+    pane.scheduleContactsRebuild = function () {
+      if (!contactsChk.checked || pane.contactsRebuildScheduled) return;
+      pane.contactsRebuildScheduled = true;
+      requestAnimationFrame(() => { pane.contactsRebuildScheduled = false; if (contactsChk.checked) pane.rebuildContacts(); });
+    };
+    pane.scheduleEllipsoidsRebuild = function () {
+      if (!ellipsoidsChk.checked || pane.ellipsoidsRebuildScheduled) return;
+      pane.ellipsoidsRebuildScheduled = true;
+      requestAnimationFrame(() => { pane.ellipsoidsRebuildScheduled = false; if (ellipsoidsChk.checked) pane.rebuildEllipsoids(); });
+    };
+
+    pane.pcaOn = function () {
+      if (!pane.obs) return;
+      if (pane.pcaRaf !== null) cancelAnimationFrame(pane.pcaRaf);
+      const start = performance.now();
+      const o = pane.obs;
+      const atomStore = pane.comp.structure.atomStore;
+      const tick = () => {
+        if (!pcaChk.checked) return;
+        const m = o.pca.modes[parseInt(pcaMode.value, 10)];
+        const tt = (performance.now() - start) / 1500;   // 1.5s period
+        const s = m.amplitude * Math.sin(2 * Math.PI * tt);
+        for (let r = 0; r < o.n_residues; r++) {
+          const ca = o.ca_indices[r];
+          atomStore.x[ca] = (o.pca.mean[3*r]   + s*m.vec[3*r])   * 10;
+          atomStore.y[ca] = (o.pca.mean[3*r+1] + s*m.vec[3*r+1]) * 10;
+          atomStore.z[ca] = (o.pca.mean[3*r+2] + s*m.vec[3*r+2]) * 10;
+        }
+        pane.comp.updateRepresentations({position: true});
+        pane.scheduleContactsRebuild();
+        pane.scheduleEllipsoidsRebuild();
+        pane.pcaRaf = requestAnimationFrame(tick);
+      };
+      tick();
+    };
+    pane.pcaOff = function () {
+      if (pane.pcaRaf !== null) { cancelAnimationFrame(pane.pcaRaf); pane.pcaRaf = null; }
+      if (pane.traj) pane.traj.setFrame(pane.traj.currentFrame);  // restore CA from frame
+    };
+
+    pane.attachOverlays = function (obs) {
+      pane.obs = obs;
+      pane.contactsList = obs.contacts;
+      const structure = pane.comp.structure;
+      const atomStore = structure.atomStore;
+      // flexibility: per-atom bfactor = residue RMSF, cartoon colored by it
+      const resBf = new Float32Array(structure.residueStore.count);
+      let rmin = Infinity, rmax = -Infinity;
+      for (let r = 0; r < obs.n_residues; r++) {
+        resBf[atomStore.residueIndex[obs.ca_indices[r]]] = obs.rmsf[r];
+        if (obs.rmsf[r] < rmin) rmin = obs.rmsf[r];
+        if (obs.rmsf[r] > rmax) rmax = obs.rmsf[r];
+      }
+      for (let a = 0; a < atomStore.count; a++) atomStore.bfactor[a] = resBf[atomStore.residueIndex[a]];
+      pane.rmin = rmin; pane.rmax = rmax;
+      pane.flexRep = pane.comp.addRepresentation("cartoon", {
+        visible: false, colorScheme: "bfactor", colorScale: "RdBu",
+        colorReverse: true, colorDomain: [rmin, rmax],
+      });
+      // sync this pane to the current widget state (toggles may already be on)
+      if (flexChk.checked) pane.setFlex(true);
+      if (contactsChk.checked) pane.rebuildContacts();
+      if (ellipsoidsChk.checked) pane.rebuildEllipsoids();
+      if (pcaChk.checked) setPcaMode(true);
+    };
+
+    // ---- load the structure ----
+    overlayEl.style.display = "flex";
+    overlayEl.style.color = "#555";
+    overlayEl.textContent = "loading...";
+    stage.loadFile(structureUrl, {ext: "pdb", asTrajectory: true}).then(c => {
+      pane.comp = c;
+      pane.cartoonRep = c.addRepresentation("cartoon");
+      c.autoView();
+      pane.traj = c.addTrajectory().trajectory;
+      pane.player = new NGL.TrajectoryPlayer(pane.traj, {
+        step: 1, timeout: BASE_TIMEOUT_MS, mode: "loop", direction: "forward",
+        interpolateType: "spline", interpolateStep: 5,
+      });
+      pane.applyPlayerParams();
+      pane.traj.signals.frameChanged.add(() => { pane.scheduleContactsRebuild(); pane.scheduleEllipsoidsRebuild(); });
+      if (isReference) {
+        const update = () => {
+          slider.max = pane.traj.frameCount - 1;
+          slider.value = pane.traj.currentFrame;
+          label.textContent = (pane.traj.currentFrame + 1) + " / " + pane.traj.frameCount;
+        };
+        pane.traj.signals.frameChanged.add(update);
+        pane.traj.signals.countChanged.add(update);
+        update();
+        playBtn.disabled = false; slider.disabled = false;
+        speedSel.disabled = false; smoothChk.disabled = false;
+      } else {
+        pane.setFrame(parseInt(slider.value, 10) || 0);
+        if (playing) pane.player.play();
+      }
+      overlayEl.style.display = "none";
+      fetchOverlays(pane);
+    }).catch(err => {
+      overlayEl.textContent = "load failed: " + err;
+      overlayEl.style.color = "#b00";
+      console.error(err);
+    });
+
+    panes.push(pane);
+    return pane;
   }
 
-  function setupOverlays(comp, traj, cartoonRep, player, isPlaying, setPlaying) {
-    // Use the saved dmax (Å -> nm) in the initial fetch so a restored
-    // "contacts on at d=10Å" doesn't trigger an immediate second request.
-    const initialDmaxNm = savedPrefs.contactsDmax !== undefined
-      ? savedPrefs.contactsDmax / 10
-      : 0.8;
-    const observablesUrl =
-      "/api/chain/{{ active_chain }}/observables.json?dmax_nm=" + initialDmaxNm;
+  function fetchOverlays(pane) {
     overlayHint.textContent = "loading overlay data...";
     overlayHint.style.color = "#777";
-    // The server computes references on first request (PCA + covariance +
-    // contact probs); this can take 5-30s. Escalate the message at 2s so
-    // the user knows the delay isn't a hang.
+    // First request computes references server-side (PCA + covariance +
+    // contact probs); can take 5-30s. Escalate the message at 2s.
     const escalate = setTimeout(() => {
-      overlayHint.textContent =
-        "computing reference observables (first request, ~5-30s)...";
+      overlayHint.textContent = "computing observables (first request, ~5-30s)...";
     }, 2000);
-    fetch(observablesUrl).then(r => {
+    fetch(pane.observablesUrl + "?dmax_nm=" + dmaxNm()).then(r => {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(obs => {
       clearTimeout(escalate);
       overlayHint.textContent = "";
-      wireOverlays(comp, traj, cartoonRep, player, isPlaying, setPlaying, obs);
+      pane.attachOverlays(obs);
+      enableOverlayControls();
     }).catch(err => {
       clearTimeout(escalate);
       overlayHint.textContent = "overlay data unavailable: " + err.message;
@@ -293,310 +435,92 @@
     });
   }
 
-  function wireOverlays(comp, traj, cartoonRep, player, isPlaying, setPlaying, obs) {
-    const structure = comp.structure;
-    const atomStore = structure.atomStore;
-    const n_res = obs.n_residues;
-    const ca_idx = obs.ca_indices;
+  // ---- enable overlay widgets once any pane has observables ----
+  let overlayControlsEnabled = false;
+  function enableOverlayControls() {
+    if (overlayControlsEnabled) return;
+    overlayControlsEnabled = true;
+    for (const el of [flexChk, contactsChk, contactsThresh, contactsDmax,
+                      ellipsoidsChk, ellipsoidsScale, pcaChk, pcaMode]) {
+      el.disabled = false;
+    }
+    // Apply restored toggle states (panes that are already loaded sync now;
+    // panes still loading sync in their own attachOverlays).
+    if (savedPrefs.flex) { flexChk.checked = true; flexChk.onchange(); }
+    if (savedPrefs.contacts) { contactsChk.checked = true; contactsChk.onchange(); }
+    if (savedPrefs.ellipsoids) { ellipsoidsChk.checked = true; ellipsoidsChk.onchange(); }
+    if (savedPrefs.pca) { pcaChk.checked = true; pcaChk.onchange(); }
+  }
 
-    // ---- flexibility coloring (B-factor injection + cartoon overlay) ----
-    // Fill bfactor for every atom with its residue's RMSF so the cartoon
-    // colors smoothly along the backbone (not just on CAs).
-    const resBf = new Float32Array(structure.residueStore.count);
-    for (let r = 0; r < n_res; r++) {
-      const resIdx = atomStore.residueIndex[ca_idx[r]];
-      resBf[resIdx] = obs.rmsf[r];
-    }
-    for (let a = 0; a < atomStore.count; a++) {
-      atomStore.bfactor[a] = resBf[atomStore.residueIndex[a]];
-    }
-    let rmin = Infinity, rmax = -Infinity;
-    for (let r = 0; r < n_res; r++) {
-      if (obs.rmsf[r] < rmin) rmin = obs.rmsf[r];
-      if (obs.rmsf[r] > rmax) rmax = obs.rmsf[r];
-    }
-    const flexRep = comp.addRepresentation("cartoon", {
-      visible: false, colorScheme: "bfactor",
-      colorScale: "RdBu", colorReverse: true, colorDomain: [rmin, rmax],
-    });
-    flexChk.disabled = false;
-    flexChk.onchange = () => {
-      flexRep.setVisibility(flexChk.checked);
-      cartoonRep.setVisibility(!flexChk.checked);
-    };
-
-    // ---- contacts (Shape with cylinders, rebuilt on slider/checkbox change) ----
-    // Distance slider triggers a server re-fetch (recomputes the probability
-    // matrix at the new cutoff); probability slider stays purely client-side.
-    // Color encodes sequence separation: short-range pairs (helical
-    // i,i+3/i,i+4) are pale yellow; long-range tertiary contacts are red.
-    let contactsList = obs.contacts;
-    let contactsComp = null;
-    function colorForSeparation(sep) {
-      // sep = |i-j|; map [2, 30+] -> pale yellow [1, 0.9, 0.4] -> red [1, 0.1, 0.0]
-      const t = Math.min(1, Math.max(0, (sep - 2) / 28));
-      return [1, 0.9 - 0.8 * t, 0.4 - 0.4 * t];
-    }
-    function rebuildContacts() {
-      if (contactsComp) { stage.removeComponent(contactsComp); contactsComp = null; }
-      if (!contactsChk.checked) return;
-      const thr = parseFloat(contactsThresh.value);
-      const shape = new NGL.Shape("contacts");
-      let count = 0;
-      // contactsList is sorted desc by probability; break as soon as we drop below threshold.
-      for (const ct of contactsList) {
-        if (ct.p < thr) break;
-        shape.addCylinder(
-          caPos(structure, ca_idx[ct.i]),
-          caPos(structure, ca_idx[ct.j]),
-          colorForSeparation(ct.j - ct.i),
-          0.1 + 0.3 * ct.p,
-        );
-        count++;
-      }
-      if (count === 0) return;
-      contactsComp = stage.addComponentFromObject(shape);
-      contactsComp.addRepresentation("buffer");
-    }
-    let dmaxFetchTimer = null;
-    let dmaxFetchSeq = 0;
-    function refetchContacts() {
-      const seq = ++dmaxFetchSeq;
-      const dmaxNm = parseFloat(contactsDmax.value) / 10;
-      const url = "/api/chain/{{ active_chain }}/observables.json?dmax_nm=" + dmaxNm;
-      contactsDmaxLbl.style.color = "#777";
-      fetch(url).then(r => r.json()).then(newObs => {
-        if (seq !== dmaxFetchSeq) return;  // a newer drag superseded this one
-        contactsList = newObs.contacts;
-        contactsDmaxLbl.style.color = "";
-        if (contactsChk.checked) rebuildContacts();
-      }).catch(err => console.warn("contacts refetch failed:", err));
-    }
-    contactsChk.disabled = false;
-    contactsThresh.disabled = false;
-    contactsDmax.disabled = false;
-    contactsChk.onchange = rebuildContacts;
-    contactsThresh.oninput = () => {
-      contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
-      if (contactsChk.checked) rebuildContacts();
-    };
-    contactsDmax.oninput = () => {
-      contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
-      if (dmaxFetchTimer) clearTimeout(dmaxFetchTimer);
-      dmaxFetchTimer = setTimeout(refetchContacts, 250);
-    };
-
-    // ---- ellipsoids (one per CA, scaled by sqrt(eigenvalues)) ----
-    let ellipsoidsComp = null;
-    function rebuildEllipsoids() {
-      if (ellipsoidsComp) { stage.removeComponent(ellipsoidsComp); ellipsoidsComp = null; }
-      if (!ellipsoidsChk.checked) return;
-      const scale = parseFloat(ellipsoidsScale.value) * 10;  // nm → A
-      const shape = new NGL.Shape("ellipsoids");
-      for (let r = 0; r < n_res; r++) {
-        const e = obs.ellipsoids[r];
-        const pos = caPos(structure, e.ca);
-        // Color by RMSF so size and color both encode motion.
-        const t = (obs.rmsf[r] - rmin) / Math.max(rmax - rmin, 1e-6);
-        const color = [t, 0.3, 1 - t];
-        const majorAxis = [
-          e.axes[0][0] * e.lengths[0] * scale,
-          e.axes[0][1] * e.lengths[0] * scale,
-          e.axes[0][2] * e.lengths[0] * scale,
-        ];
-        const minorAxis = [
-          e.axes[1][0] * e.lengths[1] * scale,
-          e.axes[1][1] * e.lengths[1] * scale,
-          e.axes[1][2] * e.lengths[1] * scale,
-        ];
-        shape.addEllipsoid(pos, color, e.lengths[2] * scale, majorAxis, minorAxis);
-      }
-      ellipsoidsComp = stage.addComponentFromObject(shape);
-      ellipsoidsComp.addRepresentation("buffer");
-    }
-    ellipsoidsChk.disabled = false;
-    ellipsoidsScale.disabled = false;
-    ellipsoidsChk.onchange = rebuildEllipsoids;
-    ellipsoidsScale.oninput = () => { if (ellipsoidsChk.checked) rebuildEllipsoids(); };
-
-    // ---- PCA mode animation (replaces the trajectory player) ----
-    let pcaRaf = null;
-    function pcaTick(startT) {
-      if (!pcaChk.checked) return;
-      const m = obs.pca.modes[parseInt(pcaMode.value, 10)];
-      const t = (performance.now() - startT) / 1500;  // 1.5s period
-      const s = m.amplitude * Math.sin(2 * Math.PI * t);
-      for (let r = 0; r < n_res; r++) {
-        const ca = ca_idx[r];
-        atomStore.x[ca] = (obs.pca.mean[3*r]   + s * m.vec[3*r])   * 10;
-        atomStore.y[ca] = (obs.pca.mean[3*r+1] + s * m.vec[3*r+1]) * 10;
-        atomStore.z[ca] = (obs.pca.mean[3*r+2] + s * m.vec[3*r+2]) * 10;
-      }
-      comp.updateRepresentations({position: true});
-      scheduleContactsRebuild();
-      scheduleEllipsoidsRebuild();
-      pcaRaf = requestAnimationFrame(() => pcaTick(startT));
-    }
-    function pcaOn() {
-      if (isPlaying()) { player.pause(); setPlaying(false); playBtn.textContent = "play"; }
-      playBtn.disabled = true;
-      slider.disabled = true;
-      pcaTick(performance.now());
-    }
-    function pcaOff() {
-      if (pcaRaf !== null) { cancelAnimationFrame(pcaRaf); pcaRaf = null; }
-      playBtn.disabled = false;
-      slider.disabled = false;
-      traj.setFrame(traj.currentFrame);  // restore CA positions from current frame
-    }
-    pcaChk.disabled = false;
-    pcaMode.disabled = false;
-    pcaChk.onchange = () => pcaChk.checked ? pcaOn() : pcaOff();
-    pcaMode.onchange = () => { if (pcaChk.checked) { pcaOff(); pcaOn(); } };
-
-    // ---- track CA positions during playback ----
-    // Contact cylinders and ellipsoids are built from the current CA
-    // positions; without rebuilds, they stay frozen at the frame at
-    // which the toggle was flipped on. Coalesce via requestAnimationFrame
-    // so rapid frameChanged signals (interpolation/play) only trigger
-    // one rebuild per repaint.
-    let contactsRebuildScheduled = false;
-    let ellipsoidsRebuildScheduled = false;
-    function scheduleContactsRebuild() {
-      if (!contactsChk.checked || contactsRebuildScheduled) return;
-      contactsRebuildScheduled = true;
-      requestAnimationFrame(() => {
-        contactsRebuildScheduled = false;
-        if (contactsChk.checked) rebuildContacts();
-      });
-    }
-    function scheduleEllipsoidsRebuild() {
-      if (!ellipsoidsChk.checked || ellipsoidsRebuildScheduled) return;
-      ellipsoidsRebuildScheduled = true;
-      requestAnimationFrame(() => {
-        ellipsoidsRebuildScheduled = false;
-        if (ellipsoidsChk.checked) rebuildEllipsoids();
-      });
-    }
-    traj.signals.frameChanged.add(() => {
-      scheduleContactsRebuild();
-      scheduleEllipsoidsRebuild();
-    });
-
-    // ---- restore saved overlay prefs (values first, then toggles) ----
-    if (savedPrefs.contactsThresh !== undefined) {
-      contactsThresh.value = savedPrefs.contactsThresh;
-      contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
-    }
-    if (savedPrefs.contactsDmax !== undefined) {
-      contactsDmax.value = savedPrefs.contactsDmax;
-      contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
-    }
-    if (savedPrefs.ellipsoidsScale !== undefined) {
-      ellipsoidsScale.value = savedPrefs.ellipsoidsScale;
-    }
-    if (savedPrefs.pcaMode !== undefined) {
-      pcaMode.value = savedPrefs.pcaMode;
-    }
-    if (savedPrefs.flex) { flexChk.checked = true; flexChk.dispatchEvent(new Event("change")); }
-    if (savedPrefs.contacts) {
-      contactsChk.checked = true;
-      contactsChk.dispatchEvent(new Event("change"));
-    }
-    if (savedPrefs.ellipsoids) {
-      ellipsoidsChk.checked = true;
-      ellipsoidsChk.dispatchEvent(new Event("change"));
-    }
-    if (savedPrefs.pca) {
-      pcaChk.checked = true;
-      pcaChk.dispatchEvent(new Event("change"));
+  // ---- overlay widgets: fan out to every loaded pane ----
+  flexChk.onchange = () => panes.forEach(p => p.setFlex(flexChk.checked));
+  contactsChk.onchange = () => panes.forEach(p => p.rebuildContacts());
+  contactsThresh.oninput = () => {
+    contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
+    if (contactsChk.checked) panes.forEach(p => p.rebuildContacts());
+  };
+  contactsDmax.oninput = () => {
+    contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
+    if (dmaxTimer) clearTimeout(dmaxTimer);
+    dmaxTimer = setTimeout(() => panes.forEach(p => p.refetchContacts()), 250);
+  };
+  ellipsoidsChk.onchange = () => panes.forEach(p => p.rebuildEllipsoids());
+  ellipsoidsScale.oninput = () => { if (ellipsoidsChk.checked) panes.forEach(p => p.rebuildEllipsoids()); };
+  function setPcaMode(on) {
+    if (on) {
+      if (playing) { playing = false; playBtn.textContent = "play"; panes.forEach(p => p.player && p.player.pause()); }
+      playBtn.disabled = true; slider.disabled = true;
+      panes.forEach(p => p.pcaOn());
+    } else {
+      panes.forEach(p => p.pcaOff());
+      playBtn.disabled = false; slider.disabled = false;
     }
   }
-</script>
-<script>
-  // -------- sample viewport (right panel: generated model ensemble) --------
-  // A second NGL stage showing the selected model's sample ensemble next to
-  // the ATLAS reference. The reference panel's playback controls (play,
-  // speed, smooth, slider) drive BOTH panels: we attach extra listeners via
-  // addEventListener so the reference's own .on* handlers keep working and
-  // both viewports respond to one set of controls. Reference and sample
-  // frames don't correspond (independent MD vs. generated samples), so the
-  // two players just run in lockstep at the same speed rather than sharing a
-  // meaningful frame index. Overlays (flexibility/contacts/etc.) stay
-  // reference-only — samples have no precomputed observables.
-  (function () {
-    const modelSel = document.getElementById("modelSel");
-    const overlay2 = document.getElementById("overlay2");
-    if (!modelSel) return;  // no samples cached for this chain
+  pcaChk.onchange = () => setPcaMode(pcaChk.checked);
+  pcaMode.onchange = () => { if (pcaChk.checked) panes.forEach(p => { p.pcaOff(); p.pcaOn(); }); };
 
+  // ---- playback widgets: drive every pane's player ----
+  playBtn.onclick = () => {
+    playing = !playing;
+    playBtn.textContent = playing ? "pause" : "play";
+    panes.forEach(p => { if (p.player) playing ? p.player.play() : p.player.pause(); });
+  };
+  speedSel.onchange = () => panes.forEach(p => p.applyPlayerParams());
+  smoothChk.onchange = () => panes.forEach(p => p.applyPlayerParams());
+  slider.oninput = () => {
+    if (playing) { playing = false; playBtn.textContent = "play"; panes.forEach(p => p.player && p.player.pause()); }
+    const f = parseInt(slider.value, 10);
+    panes.forEach(p => p.setFrame(f));
+  };
+
+  // ---- create the reference pane ----
+  const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
+  addEventListener("resize", () => stage.handleResize());
+  makePane(stage, {{ ensemble_url | tojson }},
+           "/api/chain/{{ active_chain }}/observables.json",
+           document.getElementById("overlay"), true);
+
+  // ---- create the sample pane (right), with a model picker ----
+  if (modelSel) {
     const stage2 = new NGL.Stage("viewport2", {backgroundColor: "white"});
     addEventListener("resize", () => stage2.handleResize());
-
-    let samplePlayer = null;
-    let sampleTraj = null;
-    let samplePlaying = false;
-
-    function applySharedSettings() {
-      if (!samplePlayer) return;
-      samplePlayer.setParameters({
-        timeout: BASE_TIMEOUT_MS / parseFloat(speedSel.value),
-        interpolateType: smoothChk.checked ? "spline" : "",
-      });
-    }
-
-    function loadSample(model) {
-      overlay2.style.display = "flex";
-      overlay2.style.color = "#555";
-      overlay2.textContent = "loading " + model + " samples...";
-      // Stop the old player before disposing its trajectory. NGL may still
-      // log a benign "updateStructure: traj disposed" if a queued animation
-      // tick lands after disposal; it is caught internally and harmless.
-      if (samplePlayer) { samplePlayer.stop(); }
-      samplePlayer = null;
-      sampleTraj = null;
-      samplePlaying = false;
-      stage2.removeAllComponents();
-      stage2.loadFile("/api/chain/{{ active_chain }}/sample/" + model + ".pdb",
-                      {ext: "pdb", asTrajectory: true})
-        .then(c => {
-          c.addRepresentation("cartoon");
-          c.autoView();
-          sampleTraj = c.addTrajectory().trajectory;
-          samplePlayer = new NGL.TrajectoryPlayer(sampleTraj, {
-            step: 1, timeout: BASE_TIMEOUT_MS, mode: "loop", direction: "forward",
-            interpolateType: "spline", interpolateStep: 5,
-          });
-          applySharedSettings();  // inherit current speed/smooth
-          const f = parseInt(slider.value, 10) || 0;
-          if (f < sampleTraj.frameCount) sampleTraj.setFrame(f);
-          // If the reference is already playing, start the sample too.
-          if (playBtn.textContent === "pause") { samplePlayer.play(); samplePlaying = true; }
-          overlay2.style.display = "none";
-        })
-        .catch(err => {
-          overlay2.textContent = "load failed: " + err;
-          overlay2.style.color = "#b00";
-          console.error(err);
-        });
-    }
-
-    playBtn.addEventListener("click", () => {
-      if (!samplePlayer || playBtn.disabled) return;
-      samplePlaying = !samplePlaying;
-      if (samplePlaying) samplePlayer.play(); else samplePlayer.pause();
-    });
-    speedSel.addEventListener("change", applySharedSettings);
-    smoothChk.addEventListener("change", applySharedSettings);
-    slider.addEventListener("input", () => {
-      if (samplePlayer && samplePlaying) { samplePlayer.pause(); samplePlaying = false; }
-      if (sampleTraj) {
-        const f = parseInt(slider.value, 10);
-        if (f < sampleTraj.frameCount) sampleTraj.setFrame(f);
+    const overlay2 = document.getElementById("overlay2");
+    let samplePane = null;
+    function loadSampleModel(model) {
+      if (samplePane) {
+        if (samplePane.player) samplePane.player.stop();
+        if (samplePane.pcaRaf !== null) cancelAnimationFrame(samplePane.pcaRaf);
+        const i = panes.indexOf(samplePane);
+        if (i >= 0) panes.splice(i, 1);
+        stage2.removeAllComponents();
       }
-    });
-    modelSel.addEventListener("change", () => loadSample(modelSel.value));
-
-    loadSample(modelSel.value);
-  })();
+      samplePane = makePane(stage2,
+        "/api/chain/{{ active_chain }}/sample/" + model + ".pdb",
+        "/api/chain/{{ active_chain }}/sample/" + model + "/observables.json",
+        overlay2, false);
+    }
+    modelSel.addEventListener("change", () => loadSampleModel(modelSel.value));
+    loadSampleModel(modelSel.value);
+  }
 </script>
 {% endblock %}

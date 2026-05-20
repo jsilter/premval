@@ -19,6 +19,7 @@ from premval.data import (
     fetch_val_split,
     load_chain_trajectory,
     load_ensemble_pdb_bytes,
+    load_reference_observables,
     load_sample_pdb_bytes,
     load_test_chains,
     load_topology_bytes,
@@ -250,7 +251,7 @@ def _write_fake_bundle(
     cache_dir: Path,
     chain: str,
     *,
-    kind: atlas_mod.AtlasKind = "analysis",
+    kind: str = "analysis",
     frames_per_replica: tuple[int, int, int] = (3, 4, 5),
 ) -> Path:
     """Synthesize a `{chain}.zip` with `{chain}.pdb` + 3 replica XTCs.
@@ -287,6 +288,24 @@ def test_load_chain_trajectory_concatenates_three_replicas(tmp_path: Path) -> No
     traj = load_chain_trajectory("fake_A", cache_dir=tmp_path)
     assert traj.n_frames == 3 + 4 + 5
     assert traj.topology.n_atoms == 5
+
+
+def test_non_atlas_namespace_bundle_loads_and_scores(tmp_path: Path) -> None:
+    """A bundle in a non-ATLAS namespace is a drop-in for the ATLAS loaders.
+
+    This is the linchpin of the nanobody-MD plan: any pipeline that emits the
+    ATLAS bundle layout (`{id}.pdb` + `{id}_R{1,2,3}.xtc`) under its own cache
+    namespace can reuse `load_chain_trajectory` and `load_reference_observables`
+    unchanged. Proving it for a `nanobody` namespace guards that contract.
+    """
+    _write_fake_bundle(tmp_path, "nb_A", kind="nanobody", frames_per_replica=(3, 4, 5))
+
+    traj = load_chain_trajectory("nb_A", kind="nanobody", cache_dir=tmp_path)
+    assert traj.n_frames == 3 + 4 + 5
+
+    obs = load_reference_observables("nb_A", "nanobody", cache_dir=tmp_path)
+    assert obs.ca_indices.shape[0] == traj.topology.n_atoms
+    assert (tmp_path / "references" / "nanobody" / "nb_A.npz").exists()
 
 
 def test_load_chain_trajectory_missing_bundle_raises(tmp_path: Path) -> None:

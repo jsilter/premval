@@ -21,7 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.decomposition import PCA
 
-from premval.data.atlas import AtlasKind, default_cache_dir, load_chain_trajectory
+from premval.data.atlas import default_cache_dir, load_chain_trajectory
 from premval.metrics.alphaflow_port import get_mean_covar
 from premval.metrics.panel import ALPHAFLOW_SEED, CONTACT_THRESHOLD_NM
 
@@ -62,10 +62,29 @@ def _subsample(arr: NDArray[np.floating], n: int, seed: int) -> NDArray[np.float
     return arr[np.sort(rng.choice(arr.shape[0], size=n, replace=False))]
 
 
-def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservables:
+def _compute(chain: str, kind: str, cache_dir: Path) -> ReferenceObservables:
+    traj = load_chain_trajectory(chain, kind=kind, cache_dir=cache_dir)
+    return compute_observables_from_traj(traj)
+
+
+def compute_observables_from_traj(traj: md.Trajectory) -> ReferenceObservables:
+    """Compute the full observables panel from an in-memory trajectory.
+
+    Shared by the ATLAS reference path (`load_reference_observables`) and the
+    model-samples path (`premval.data.samples.load_sample_observables`): both
+    feed a CA-sliced, frame-0-superposed trajectory through the same PCA /
+    moments / contact-probability / RMSF computation, so reference and sample
+    overlays are computed identically and are directly comparable.
+
+    Args:
+        traj: A loaded trajectory (any number of frames; CA atoms are sliced
+            out internally). Frame 0 is treated as the crystal/reference frame.
+
+    Returns:
+        The computed `ReferenceObservables`.
+    """
     import mdtraj
 
-    traj = load_chain_trajectory(chain, kind=kind, cache_dir=cache_dir)
     ca_idx = _ca_indices(traj.topology)
     traj_ca = traj.atom_slice(ca_idx)
     traj_ca.superpose(traj_ca, frame=0)
@@ -111,7 +130,8 @@ def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservabl
     )
 
 
-def _save(obs: ReferenceObservables, path: Path) -> None:
+def save_observables(obs: ReferenceObservables, path: Path) -> None:
+    """Write observables to `path` as a `.npz` (creating parent dirs)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         path,
@@ -128,7 +148,8 @@ def _save(obs: ReferenceObservables, path: Path) -> None:
     )
 
 
-def _load_from_disk(path: Path) -> ReferenceObservables:
+def load_observables(path: Path) -> ReferenceObservables:
+    """Load observables previously written by `save_observables`."""
     data = np.load(path)
     return ReferenceObservables(
         ca_indices=data["ca_indices"],
@@ -146,7 +167,7 @@ def _load_from_disk(path: Path) -> ReferenceObservables:
 
 def load_reference_observables(
     chain: str,
-    kind: AtlasKind = "analysis",
+    kind: str = "analysis",
     cache_dir: Path | None = None,
     *,
     force: bool = False,
@@ -158,7 +179,8 @@ def load_reference_observables(
 
     Args:
         chain: PDB chain identifier such as `6cka_B`.
-        kind: ATLAS payload tier; must match the cached trajectory bundle.
+        kind: Cache namespace (ATLAS tier such as `analysis`, or another
+            dataset name like `nanobody`); must match the cached bundle.
         cache_dir: Root cache directory.
         force: If True, recompute and overwrite the cache even when a
             `.npz` is already on disk. Use when the upstream code that
@@ -168,7 +190,7 @@ def load_reference_observables(
         cache_dir = default_cache_dir()
     path = cache_path(chain, kind, cache_dir)
     if path.exists() and not force:
-        return _load_from_disk(path)
+        return load_observables(path)
     obs = _compute(chain, kind, cache_dir)
-    _save(obs, path)
+    save_observables(obs, path)
     return obs

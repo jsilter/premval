@@ -44,6 +44,7 @@ from premval.data import (
     default_samples_dir,
     load_ensemble_pdb_bytes,
     load_reference_observables,
+    load_sample_observables,
     load_sample_pdb_bytes,
     load_test_chains,
     load_topology_bytes,
@@ -280,6 +281,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(content=data, media_type="chemical/x-pdb")
+
+    @app.get("/api/chain/{chain}/sample/{model}/observables.json")
+    def sample_observables_json(
+        chain: str,
+        model: str,
+        settings: SettingsDep,
+        dmax_nm: Annotated[float, Query(ge=0.3, le=2.0)] = _DEFAULT_DMAX_NM,
+    ) -> JSONResponse:
+        # Same overlay panel as the reference, but computed from the model's
+        # own sample ensemble so the two panes are directly comparable.
+        # Computed lazily on first request (can take a few seconds), then
+        # cached as a .npz alongside the samples.
+        try:
+            refs = load_sample_observables(model, chain, settings.samples_dir)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(_build_observables_dict(refs, dmax_nm=dmax_nm))
 
     @app.get("/api/chain/{chain}/observables.json")
     def observables_json(

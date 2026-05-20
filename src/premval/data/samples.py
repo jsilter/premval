@@ -16,6 +16,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from premval.data.references import (
+    ReferenceObservables,
+    compute_observables_from_traj,
+    load_observables,
+    save_observables,
+)
+
 
 def default_samples_dir() -> Path:
     """Return the default samples cache: `~/.cache/premval/samples/`.
@@ -74,3 +81,57 @@ def load_sample_pdb_bytes(model: str, chain: str, samples_dir: Path | None = Non
             f"no cached sample at {path}; expected {model!r} ensemble for chain {chain!r}"
         )
     return path.read_bytes()
+
+
+def sample_observables_path(model: str, chain: str, samples_dir: Path | None = None) -> Path:
+    """Cache path for a sample ensemble's observables `.npz`.
+
+    Kept under the samples cache in an underscore-prefixed dir so it is not
+    mistaken for a model by `available_models`:
+    `{dir}/_observables/{model}/{chain}.npz`.
+    """
+    root = samples_dir or default_samples_dir()
+    return root / "_observables" / model / f"{chain}.npz"
+
+
+def load_sample_observables(
+    model: str,
+    chain: str,
+    samples_dir: Path | None = None,
+    *,
+    force: bool = False,
+) -> ReferenceObservables:
+    """Compute (and cache) the observables panel for a model's sample ensemble.
+
+    Runs the same computation as the ATLAS reference path
+    (`compute_observables_from_traj`) on the sample's multi-model PDB, so the
+    sample overlays (flexibility, contacts, ellipsoids, PCA) are directly
+    comparable to the reference's. First call computes + saves; later calls
+    memo-load from `sample_observables_path`.
+
+    Args:
+        model: Sample model key, e.g. `alphaflow_md_base`.
+        chain: PDB chain identifier.
+        samples_dir: Samples cache root. Defaults to `default_samples_dir()`.
+        force: Recompute and overwrite an existing cache entry.
+
+    Returns:
+        The computed `ReferenceObservables` for the sample ensemble.
+
+    Raises:
+        FileNotFoundError: If no cached sample PDB exists for `(model, chain)`.
+    """
+    pdb = sample_path(model, chain, samples_dir)
+    if not pdb.exists():
+        raise FileNotFoundError(
+            f"no cached sample at {pdb}; expected {model!r} ensemble for chain {chain!r}"
+        )
+    cache = sample_observables_path(model, chain, samples_dir)
+    if cache.exists() and not force:
+        return load_observables(cache)
+
+    import mdtraj as md
+
+    obs = compute_observables_from_traj(md.load(str(pdb)))
+    save_observables(obs, cache)
+    return obs

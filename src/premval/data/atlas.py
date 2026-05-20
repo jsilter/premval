@@ -87,8 +87,16 @@ def load_test_chains() -> list[str]:
     return _load_split_chains(_TEST_CSV)
 
 
-def bundle_path(cache_dir: Path, kind: AtlasKind, chain: str) -> Path:
-    """Path to a cached ATLAS bundle: `{cache_dir}/{kind}/{chain}.zip`."""
+def bundle_path(cache_dir: Path, kind: str, chain: str) -> Path:
+    """Path to a cached trajectory bundle: `{cache_dir}/{kind}/{chain}.zip`.
+
+    `kind` is the cache namespace: an ATLAS payload tier (`analysis` /
+    `protein` / `total`) for ATLAS data, or any other dataset name (e.g.
+    `nanobody`) for bundles produced outside ATLAS that share the same
+    on-disk layout. Typed `str` rather than `AtlasKind` so non-ATLAS
+    datasets can reuse the loader path; the ATLAS *download* path stays
+    `AtlasKind`-typed.
+    """
     return cache_dir / kind / f"{chain}.zip"
 
 
@@ -209,7 +217,7 @@ def fetch_val_split(
 def load_chain_trajectory(
     chain: str,
     *,
-    kind: AtlasKind = "analysis",
+    kind: str = "analysis",
     cache_dir: Path | None = None,
 ) -> md.Trajectory:
     """Load a cached ATLAS bundle as one concatenated `mdtraj.Trajectory`.
@@ -223,7 +231,9 @@ def load_chain_trajectory(
 
     Args:
         chain: PDB chain identifier such as `6cka_B`.
-        kind: ATLAS payload tier; must match the cached bundle's tier.
+        kind: Cache namespace (ATLAS tier such as `analysis`, or another
+            dataset name like `nanobody`); must match where the bundle is
+            cached.
         cache_dir: Root cache directory. Defaults to `default_cache_dir()`.
 
     Returns:
@@ -268,7 +278,7 @@ def load_chain_trajectory(
 def load_topology_bytes(
     chain: str,
     *,
-    kind: AtlasKind = "analysis",
+    kind: str = "analysis",
     cache_dir: Path | None = None,
 ) -> bytes:
     """Return the raw `{chain}.pdb` bytes from a cached ATLAS bundle.
@@ -305,7 +315,7 @@ def load_topology_bytes(
 def load_ensemble_pdb_bytes(
     chain: str,
     *,
-    kind: AtlasKind = "analysis",
+    kind: str = "analysis",
     cache_dir: Path | None = None,
     max_frames: int = 250,
 ) -> bytes:
