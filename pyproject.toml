@@ -13,7 +13,8 @@ dependencies = [
     "scipy (>=1.17.1,<2.0.0)",
     "scikit-learn (>=1.5,<2.0)",
     "mdtraj (>=1.11.1.post1,<2.0.0)",
-    "pymol-open-source (>=3.2.0a0,<4.0.0)"
+    "pymol-open-source (>=3.2.0a0,<4.0.0)",
+    "tqdm (>=4.66,<5.0)"
 ]
 
 [project.scripts]
@@ -79,4 +80,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["sklearn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tqdm"]
 ignore_missing_imports = true

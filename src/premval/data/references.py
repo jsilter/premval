@@ -82,8 +82,17 @@ def _compute(chain: str, kind: AtlasKind, cache_dir: Path) -> ReferenceObservabl
     sub_xyz = _subsample(ref_xyz, _SUBSAMPLE_N, ALPHAFLOW_SEED)
     ref_mean, ref_covar = get_mean_covar(sub_xyz)
 
-    distmat = np.linalg.norm(sub_xyz[:, None, :] - sub_xyz[:, :, None], axis=-1)
-    ref_contact = (distmat < CONTACT_THRESHOLD_NM).mean(0).astype(np.float32)
+    # Stream the distance matrix frame-by-frame: the vectorized form
+    # `sub_xyz[:, None] - sub_xyz[:, :, None]` materializes a
+    # (n_sub, n_res, n_res, 3) intermediate that OOMs on larger chains
+    # (~1.9 GB for n_res=400, n_sub=1000). Per-frame it's only
+    # (n_res, n_res, 3) bytes.
+    n_res = sub_xyz.shape[1]
+    contact_count = np.zeros((n_res, n_res), dtype=np.float32)
+    for frame in sub_xyz:
+        d = np.linalg.norm(frame[:, None, :] - frame[None, :, :], axis=-1)
+        contact_count += (d < CONTACT_THRESHOLD_NM).astype(np.float32)
+    ref_contact = (contact_count / sub_xyz.shape[0]).astype(np.float32)
 
     # Match panel.rmsf_correlation: ×10 to convert nm → A.
     ref_rmsf = mdtraj.rmsf(traj_ca, traj_ca[0]) * 10
@@ -139,16 +148,26 @@ def load_reference_observables(
     chain: str,
     kind: AtlasKind = "analysis",
     cache_dir: Path | None = None,
+    *,
+    force: bool = False,
 ) -> ReferenceObservables:
     """Load cached reference observables for `chain`; compute and save if missing.
 
     Cache layout: `{cache_dir}/references/{kind}/{chain}.npz`. Default
     `cache_dir` is `default_cache_dir()` (i.e. `~/.cache/premval`).
+
+    Args:
+        chain: PDB chain identifier such as `6cka_B`.
+        kind: ATLAS payload tier; must match the cached trajectory bundle.
+        cache_dir: Root cache directory.
+        force: If True, recompute and overwrite the cache even when a
+            `.npz` is already on disk. Use when the upstream code that
+            produces references has changed.
     """
     if cache_dir is None:
         cache_dir = default_cache_dir()
     path = cache_path(chain, kind, cache_dir)
-    if path.exists():
+    if path.exists() and not force:
         return _load_from_disk(path)
     obs = _compute(chain, kind, cache_dir)
     _save(obs, path)

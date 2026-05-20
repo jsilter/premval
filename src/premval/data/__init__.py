@@ -18,22 +18,48 @@ from premval.data.atlas import (
     fetch_val_split,
     load_chain_trajectory,
     load_ensemble_pdb_bytes,
+    load_test_chains,
     load_topology_bytes,
     load_val_chains,
 )
+from premval.data.published import PUBLISHED_SOURCES, PublishedSource, fetch_published
+from premval.data.rcsb import (
+    assembly_cache_path,
+    fetch_assembly_pdb,
+    load_assembly_bytes,
+)
 from premval.data.references import ReferenceObservables, load_reference_observables
+from premval.data.samples import (
+    available_chains,
+    available_models,
+    default_samples_dir,
+    load_sample_pdb_bytes,
+    sample_path,
+)
 
 __all__ = [
     "ATLAS_KINDS",
     "ATLAS_REPLICAS",
+    "PUBLISHED_SOURCES",
     "AtlasKind",
+    "PublishedSource",
     "ReferenceObservables",
+    "assembly_cache_path",
+    "available_chains",
+    "available_models",
     "bundle_path",
     "default_cache_dir",
+    "default_samples_dir",
+    "fetch_assembly_pdb",
+    "fetch_published",
     "fetch_val_split",
+    "load_assembly_bytes",
     "load_chain_trajectory",
     "load_ensemble_pdb_bytes",
     "load_reference_observables",
+    "load_sample_pdb_bytes",
+    "load_test_chains",
     "load_topology_bytes",
     "load_val_chains",
+    "sample_path",
 ]

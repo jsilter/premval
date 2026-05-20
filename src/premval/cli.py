@@ -26,15 +26,20 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from tqdm import tqdm
+
 from premval.data import (
     ATLAS_KINDS,
+    PUBLISHED_SOURCES,
     AtlasKind,
     default_cache_dir,
+    fetch_published,
     fetch_val_split,
     load_reference_observables,
     load_val_chains,
 )
 from premval.data.references import cache_path
+from premval.leaderboard import score_split
 from premval.scoring import score_chain
 
 
@@ -49,6 +54,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_score(args)
     if args.command == "prepare-refs":
         return _cmd_prepare_refs(args)
+    if args.command == "ingest":
+        return _cmd_ingest(args)
+    if args.command == "score-all":
+        return _cmd_score_all(args)
     if args.command == "serve":
         return _cmd_serve(args)
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover - argparse guards
@@ -86,12 +95,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="write JSON to this path; otherwise stdout",
     )
 
-    prep = sub.add_parser(
-        "prepare-refs", help="precompute reference-observables cache for chains"
-    )
-    prep.add_argument(
-        "--chains", nargs="*", default=None, help="chain ids; default = val split"
-    )
+    prep = sub.add_parser("prepare-refs", help="precompute reference-observables cache for chains")
+    prep.add_argument("--chains", nargs="*", default=None, help="chain ids; default = val split")
     prep.add_argument(
         "--kind",
         choices=ATLAS_KINDS,
@@ -99,6 +104,51 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ATLAS payload tier (default: analysis)",
     )
     prep.add_argument("--cache-dir", type=Path, default=None)
+    prep.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="recompute and overwrite chains that already have a cached .npz",
+    )
+
+    ingest = sub.add_parser(
+        "ingest", help="download a published model's ATLAS ensembles into the samples cache"
+    )
+    ingest.add_argument(
+        "--model",
+        required=True,
+        choices=sorted(PUBLISHED_SOURCES),
+        help="published model key to ingest",
+    )
+    ingest.add_argument(
+        "--chains", nargs="*", default=None, help="chain ids; default = all targets in the archive"
+    )
+    ingest.add_argument("--samples-dir", type=Path, default=None)
+    ingest.add_argument(
+        "--force",
+        action="store_true",
+        help="re-download the archive and overwrite cached ensembles",
+    )
+
+    score_all = sub.add_parser(
+        "score-all", help="batch-score cached models across a split into results/"
+    )
+    score_all.add_argument(
+        "--models", nargs="*", default=None, help="model keys; default = all cached samples"
+    )
+    score_all.add_argument(
+        "--split", choices=("val", "test"), default="test", help="ATLAS split (default: test)"
+    )
+    score_all.add_argument("--cache-dir", type=Path, default=None)
+    score_all.add_argument("--samples-dir", type=Path, default=None)
+    score_all.add_argument(
+        "--kind",
+        choices=ATLAS_KINDS,
+        default="analysis",
+        help="ATLAS payload tier of the reference bundles (default: analysis)",
+    )
+    score_all.add_argument(
+        "--out", type=Path, default=None, help="results directory (default: results/)"
+    )
 
     serve = sub.add_parser("serve", help="run the FastAPI dashboard (requires [web] extra)")
     serve.add_argument("--host", default="127.0.0.1", help="bind host (default: 127.0.0.1)")
@@ -131,9 +181,42 @@ def _cmd_prepare_refs(args: argparse.Namespace) -> int:
     kind: AtlasKind = args.kind
     chains = args.chains if args.chains else load_val_chains()
     cache_dir = args.cache_dir or default_cache_dir()
-    for chain in chains:
-        load_reference_observables(chain, kind=kind, cache_dir=cache_dir)
-        print(f"{chain}\t{cache_path(chain, kind, cache_dir)}")
+    bar = tqdm(chains, desc="prepare-refs", unit="chain")
+    for chain in bar:
+        path = cache_path(chain, kind, cache_dir)
+        if path.exists() and not args.overwrite:
+            bar.set_postfix_str(f"{chain}: cached")
+            continue
+        bar.set_postfix_str(f"{chain}: computing", refresh=True)
+        load_reference_observables(chain, kind=kind, cache_dir=cache_dir, force=args.overwrite)
+        bar.set_postfix_str(f"{chain}: done")
+    return 0
+
+
+def _cmd_ingest(args: argparse.Namespace) -> int:
+    results = fetch_published(
+        args.model,
+        samples_dir=args.samples_dir,
+        chains=args.chains,
+        force=args.force,
+    )
+    for chain, path in sorted(results.items()):
+        print(f"{chain}\t{path}")
+    print(f"ingested {len(results)} chains for {args.model!r}", file=sys.stderr)
+    return 0
+
+
+def _cmd_score_all(args: argparse.Namespace) -> int:
+    written = score_split(
+        args.models,
+        args.split,
+        cache_dir=args.cache_dir,
+        samples_dir=args.samples_dir,
+        kind=args.kind,
+        out_dir=args.out,
+    )
+    for model, path in sorted(written.items()):
+        print(f"{model}\t{path}")
     return 0
 
 

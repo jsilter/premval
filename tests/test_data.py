@@ -12,12 +12,18 @@ import requests
 from premval.data import (
     ATLAS_KINDS,
     ATLAS_REPLICAS,
+    available_chains,
+    available_models,
     default_cache_dir,
+    default_samples_dir,
     fetch_val_split,
     load_chain_trajectory,
     load_ensemble_pdb_bytes,
+    load_sample_pdb_bytes,
+    load_test_chains,
     load_topology_bytes,
     load_val_chains,
+    sample_path,
 )
 from premval.data import atlas as atlas_mod
 
@@ -32,6 +38,16 @@ def test_load_val_chains_names_are_pdb_chain_format() -> None:
         pdb, _, code = chain.partition("_")
         assert len(pdb) == 4 and pdb.isalnum()
         assert len(code) == 1 and code.isalpha()
+
+
+def test_load_test_chains_has_82_entries() -> None:
+    assert len(load_test_chains()) == 82
+
+
+def test_test_and_val_splits_are_disjoint() -> None:
+    # AlphaFlow's published samples cover only the test split; the leaderboard
+    # relies on the two splits not overlapping.
+    assert set(load_test_chains()).isdisjoint(load_val_chains())
 
 
 def test_atlas_kinds_constant() -> None:
@@ -209,9 +225,7 @@ def _toy_chain_traj(n_frames: int, n_residues: int = 5, seed: int = 0) -> md.Tra
     return md.Trajectory(xyz, top)
 
 
-def make_full_atom_trajectory(
-    n_frames: int, n_residues: int, *, seed: int = 0
-) -> md.Trajectory:
+def make_full_atom_trajectory(n_frames: int, n_residues: int, *, seed: int = 0) -> md.Trajectory:
     """Build a tiny full-atom (N, CA, C, O) trajectory.
 
     Used by tests that exercise CA selection: every residue gets four
@@ -331,6 +345,46 @@ def test_load_ensemble_pdb_bytes_passes_through_small_traj(tmp_path: Path) -> No
     raw = load_ensemble_pdb_bytes("fake_F", cache_dir=tmp_path, max_frames=250)
     text = raw.decode("ascii")
     assert text.count("\nMODEL ") + text.startswith("MODEL ") == 9
+
+
+def _write_fake_sample(samples_dir: Path, model: str, chain: str, payload: bytes) -> Path:
+    """Write a stand-in `{model}/{chain}.pdb` into a samples cache."""
+    path = sample_path(model, chain, samples_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return path
+
+
+def test_default_samples_dir_under_home() -> None:
+    assert default_samples_dir() == Path.home() / ".cache" / "premval" / "samples"
+
+
+def test_available_models_lists_dirs_and_skips_scratch(tmp_path: Path) -> None:
+    _write_fake_sample(tmp_path, "alphaflow_md_base", "6o2v_A", b"MODEL\n")
+    _write_fake_sample(tmp_path, "esmflow_md_base", "6o2v_A", b"MODEL\n")
+    (tmp_path / "_zips").mkdir()  # scratch dir must be ignored
+    assert available_models(tmp_path) == ["alphaflow_md_base", "esmflow_md_base"]
+
+
+def test_available_models_empty_when_dir_absent(tmp_path: Path) -> None:
+    assert available_models(tmp_path / "nope") == []
+
+
+def test_available_chains_lists_pdb_stems(tmp_path: Path) -> None:
+    _write_fake_sample(tmp_path, "alphaflow_md_base", "6o2v_A", b"x")
+    _write_fake_sample(tmp_path, "alphaflow_md_base", "7ead_A", b"x")
+    assert available_chains("alphaflow_md_base", tmp_path) == ["6o2v_A", "7ead_A"]
+    assert available_chains("missing_model", tmp_path) == []
+
+
+def test_load_sample_pdb_bytes_roundtrips(tmp_path: Path) -> None:
+    _write_fake_sample(tmp_path, "alphaflow_md_base", "6o2v_A", b"MODEL 1\nENDMDL\n")
+    assert load_sample_pdb_bytes("alphaflow_md_base", "6o2v_A", tmp_path) == b"MODEL 1\nENDMDL\n"
+
+
+def test_load_sample_pdb_bytes_missing_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no cached sample"):
+        load_sample_pdb_bytes("alphaflow_md_base", "nope_A", tmp_path)
 
 
 def test_build_session_mounts_https_adapter() -> None:

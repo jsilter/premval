@@ -38,6 +38,7 @@ ATLAS_REPLICAS: tuple[int, int, int] = (1, 2, 3)
 
 _API_BASE = "https://www.dsimb.inserm.fr/ATLAS/api"
 _VAL_CSV = "atlas_val.csv"
+_TEST_CSV = "atlas_test.csv"
 _DOWNLOAD_TIMEOUT_S = 600
 _CHUNK_SIZE = 1 << 16
 # Two separate retry budgets that compound: urllib3 handles transient
@@ -60,15 +61,30 @@ def default_cache_dir() -> Path:
     return Path.home() / ".cache" / "premval" / "atlas"
 
 
+def _load_split_chains(csv_name: str) -> list[str]:
+    """Return the `name` column of a vendored ATLAS split CSV."""
+    csv_text = resources.files(__package__).joinpath(csv_name).read_text(encoding="utf-8")
+    reader = csv.DictReader(csv_text.splitlines())
+    return [row["name"] for row in reader]
+
+
 def load_val_chains() -> list[str]:
     """Return the 39 PDB chain identifiers in the AlphaFlow ATLAS val split.
 
     Reads the vendored `atlas_val.csv` shipped inside the package and
     returns the `name` column (e.g., `6cka_B`).
     """
-    csv_text = resources.files(__package__).joinpath(_VAL_CSV).read_text(encoding="utf-8")
-    reader = csv.DictReader(csv_text.splitlines())
-    return [row["name"] for row in reader]
+    return _load_split_chains(_VAL_CSV)
+
+
+def load_test_chains() -> list[str]:
+    """Return the 82 PDB chain identifiers in the AlphaFlow ATLAS test split.
+
+    Reads the vendored `atlas_test.csv` shipped inside the package and
+    returns the `name` column. This is the split AlphaFlow/ESMFlow published
+    inference samples for, so it is the split the leaderboard scores against.
+    """
+    return _load_split_chains(_TEST_CSV)
 
 
 def bundle_path(cache_dir: Path, kind: AtlasKind, chain: str) -> Path:

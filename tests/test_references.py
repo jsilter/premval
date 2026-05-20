@@ -125,6 +125,22 @@ class TestMissingCacheTriggersCompute:
         assert cache_path("chain_A", "analysis", tmp_path).exists()
         assert cache_path("chain_A", "protein", tmp_path).exists()
 
+    def test_force_recomputes_and_overwrites_cache(self, tmp_path: Path) -> None:
+        traj = make_full_atom_trajectory(n_frames=25, n_residues=7)
+        with patch(
+            "premval.data.references.load_chain_trajectory", return_value=traj
+        ) as mock_load:
+            load_reference_observables("mychain_A", kind="analysis", cache_dir=tmp_path)
+            assert mock_load.call_count == 1
+            # Without force: cache hit, no recompute.
+            load_reference_observables("mychain_A", kind="analysis", cache_dir=tmp_path)
+            assert mock_load.call_count == 1
+            # With force: recompute even though the cache exists.
+            load_reference_observables(
+                "mychain_A", kind="analysis", cache_dir=tmp_path, force=True
+            )
+            assert mock_load.call_count == 2
+
 
 class TestPCAReprojection:
     def test_reprojection_consistent(self, tmp_path: Path) -> None:
