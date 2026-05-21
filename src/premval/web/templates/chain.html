@@ -59,6 +59,11 @@
   <label style="display:flex;gap:4px;align-items:center;white-space:nowrap">
     <input id="smoothChk" type="checkbox" checked disabled>smooth
   </label>
+  <label style="display:flex;gap:4px;align-items:center;white-space:nowrap"
+         title="Align the model to the reference and link rotate/zoom (paused only)">
+    <input id="syncChk" type="checkbox" checked
+           {% if not sample_models %}disabled{% endif %}>sync
+  </label>
 </div>
 <div id="overlayRow" style="display:flex;gap:14px;align-items:center;
                             margin-top:8px;flex-wrap:wrap;
@@ -173,11 +178,14 @@
   const pcaMode = document.getElementById("pcaMode");
   const overlayHint = document.getElementById("overlayHint");
   const modelSel = document.getElementById("modelSel");   // null if no samples
+  const syncChk = document.getElementById("syncChk");
   const BASE_TIMEOUT_MS = 80;  // 1x speed
 
   const panes = [];       // loaded panes (each may still be fetching overlays)
   let playing = false;
   let dmaxTimer = null;
+  let stage2 = null;      // sample stage (assigned below if there are samples)
+  let syncBusy = false;   // guards camera-link reentrancy / load cross-talk
 
   function caPos(structure, ca) {
     const s = structure.atomStore;
@@ -206,12 +214,13 @@
         ellipsoidsScale: parseFloat(ellipsoidsScale.value),
         pca: pcaChk.checked, pcaMode: pcaMode.value,
         smooth: smoothChk.checked, speed: speedSel.value,
+        sync: syncChk.checked,
       }));
     } catch (e) { /* storage disabled or quota exceeded; skip */ }
   }
   for (const el of [flexChk, contactsChk, contactsDmax, contactsThresh,
                     ellipsoidsChk, ellipsoidsScale, pcaChk, pcaMode,
-                    smoothChk, speedSel]) {
+                    smoothChk, speedSel, syncChk]) {
     el.addEventListener("change", persistPrefs);
     if (el.type === "range") el.addEventListener("input", persistPrefs);
   }
@@ -219,6 +228,7 @@
   // ---- restore widget VALUES up front so panes inherit them on load ----
   if (savedPrefs.speed !== undefined) speedSel.value = savedPrefs.speed;
   if (savedPrefs.smooth !== undefined) smoothChk.checked = savedPrefs.smooth;
+  if (savedPrefs.sync !== undefined && !syncChk.disabled) syncChk.checked = savedPrefs.sync;
   if (savedPrefs.contactsThresh !== undefined) contactsThresh.value = savedPrefs.contactsThresh;
   if (savedPrefs.contactsDmax !== undefined) contactsDmax.value = savedPrefs.contactsDmax;
   if (savedPrefs.ellipsoidsScale !== undefined) ellipsoidsScale.value = savedPrefs.ellipsoidsScale;
@@ -376,7 +386,7 @@
     stage.loadFile(structureUrl, {ext: "pdb", asTrajectory: true}).then(c => {
       pane.comp = c;
       pane.cartoonRep = c.addRepresentation("cartoon");
-      c.autoView();
+      withSyncBusy(() => c.autoView());
       pane.traj = c.addTrajectory().trajectory;
       pane.player = new NGL.TrajectoryPlayer(pane.traj, {
         step: 1, timeout: BASE_TIMEOUT_MS, mode: "loop", direction: "forward",
@@ -401,6 +411,7 @@
       }
       overlayEl.style.display = "none";
       fetchOverlays(pane);
+      matchSampleCamera();   // align cameras once structures are in view
     }).catch(err => {
       overlayEl.textContent = "load failed: " + err;
       overlayEl.style.color = "#b00";
@@ -469,6 +480,9 @@
   function setPcaMode(on) {
     if (on) {
       if (playing) { playing = false; playBtn.textContent = "play"; panes.forEach(p => p.player && p.player.pause()); }
+      // Reset to frame 1 so the trajectory doesn't snap to a random frame
+      // when PCA mode is toggled off.
+      panes.forEach(p => p.setFrame(0));
       playBtn.disabled = true; slider.disabled = true;
       panes.forEach(p => p.pcaOn());
     } else {
@@ -493,6 +507,29 @@
     panes.forEach(p => p.setFrame(f));
   };
 
+  // ---- view synchronization (camera link) ----
+  // The model is already rigid-body aligned to the reference server-side
+  // (frame 0 anchored to the reference, each later frame to the previous), so
+  // the structures share an orientation with no client-side superposition and
+  // no per-frame work. The "sync" checkbox links the *camera*: rotating or
+  // zooming either pane mirrors to the other. Camera mirroring is suspended
+  // during playback (per spec). `syncBusy` guards link reentrancy and
+  // suppresses cross-talk from the programmatic autoView during (re)loads.
+  function withSyncBusy(fn) { const prev = syncBusy; syncBusy = true; try { fn(); } finally { syncBusy = prev; } }
+  function matchSampleCamera() {
+    if (!syncChk.checked || !stage2) return;
+    withSyncBusy(() => stage2.viewerControls.orient(stage.viewerControls.getOrientation()));
+  }
+  function linkCameras() {
+    const link = (src, dst) => src.viewerControls.signals.changed.add(() => {
+      if (!syncChk.checked || playing || syncBusy) return;
+      withSyncBusy(() => dst.viewerControls.orient(src.viewerControls.getOrientation()));
+    });
+    link(stage, stage2);
+    link(stage2, stage);
+  }
+  syncChk.onchange = () => matchSampleCamera();
+
   // ---- create the reference pane ----
   const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
   addEventListener("resize", () => stage.handleResize());
@@ -502,8 +539,9 @@
 
   // ---- create the sample pane (right), with a model picker ----
   if (modelSel) {
-    const stage2 = new NGL.Stage("viewport2", {backgroundColor: "white"});
+    stage2 = new NGL.Stage("viewport2", {backgroundColor: "white"});
     addEventListener("resize", () => stage2.handleResize());
+    linkCameras();
     const overlay2 = document.getElementById("overlay2");
     let samplePane = null;
     function loadSampleModel(model) {

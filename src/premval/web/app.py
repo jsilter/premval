@@ -42,10 +42,10 @@ from premval.data import (
     bundle_path,
     default_cache_dir,
     default_samples_dir,
+    load_aligned_sample_pdb_bytes,
     load_ensemble_pdb_bytes,
     load_reference_observables,
     load_sample_observables,
-    load_sample_pdb_bytes,
     load_test_chains,
     load_topology_bytes,
     load_val_chains,
@@ -274,10 +274,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = load_ensemble_pdb_bytes(chain, kind=settings.kind, cache_dir=settings.cache_dir)
         return Response(content=data, media_type="chemical/x-pdb")
 
+    def _reference_ca(chain: str, settings: Settings) -> NDArray[np.float32]:
+        """Reference frame-0 CA coords (nm) used to anchor sample alignment."""
+        refs = load_reference_observables(chain, kind=settings.kind, cache_dir=settings.cache_dir)
+        return refs.crystal_xyz_ca
+
     @app.get("/api/chain/{chain}/sample/{model}.pdb")
     def sample_bytes(chain: str, model: str, settings: SettingsDep) -> Response:
+        # Served rigid-body aligned to the reference (frame 0 anchored to the
+        # reference, each later frame to the previous), so the model is
+        # oriented like the reference and doesn't tumble during playback.
+        _require_cached(chain, settings)  # reference bundle needed to align against
         try:
-            data = load_sample_pdb_bytes(model, chain, settings.samples_dir)
+            data = load_aligned_sample_pdb_bytes(
+                model, chain, _reference_ca(chain, settings), settings.samples_dir
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(content=data, media_type="chemical/x-pdb")
@@ -289,12 +300,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings: SettingsDep,
         dmax_nm: Annotated[float, Query(ge=0.3, le=2.0)] = _DEFAULT_DMAX_NM,
     ) -> JSONResponse:
-        # Same overlay panel as the reference, but computed from the model's
-        # own sample ensemble so the two panes are directly comparable.
+        # Same overlay panel as the reference, computed from the model's own
+        # (aligned) sample ensemble so the two panes are directly comparable.
         # Computed lazily on first request (can take a few seconds), then
         # cached as a .npz alongside the samples.
+        _require_cached(chain, settings)
         try:
-            refs = load_sample_observables(model, chain, settings.samples_dir)
+            refs = load_sample_observables(
+                model, chain, _reference_ca(chain, settings), settings.samples_dir
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(_build_observables_dict(refs, dmax_nm=dmax_nm))

@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from premval.web.app import Settings, create_app
-from tests.test_data import _write_fake_bundle
+from tests.test_data import _write_fake_bundle, make_full_atom_trajectory
 
 # 6e33_A is the shortest sequence in the val split (61 residues); using a
 # real val-chain name keeps the in-app `chain not in val split` 404 guard
@@ -77,16 +77,26 @@ def test_chain_page_accepts_non_val_cached_chain(tmp_path: Path) -> None:
     assert r.status_code == 200
 
 
-def _write_fake_sample(samples_dir: Path, model: str, chain: str, payload: bytes) -> None:
+def _write_placeholder_sample(samples_dir: Path, model: str, chain: str) -> None:
+    """Create a sample file whose mere existence the chain page checks."""
     path = samples_dir / model / f"{chain}.pdb"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
+    path.write_bytes(b"placeholder")
+
+
+def _write_real_sample(
+    samples_dir: Path, model: str, chain: str, n_residues: int, n_frames: int = 6
+) -> None:
+    """Write a real multi-model PDB sample (so the alignment path can load it)."""
+    path = samples_dir / model / f"{chain}.pdb"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    make_full_atom_trajectory(n_frames=n_frames, n_residues=n_residues, seed=3).save_pdb(str(path))
 
 
 def test_chain_page_with_sample_shows_model_picker(tmp_path: Path) -> None:
     _write_fake_bundle(tmp_path, _REAL_CHAIN, frames_per_replica=(3, 4, 5))
     samples = tmp_path / "samples"
-    _write_fake_sample(samples, "alphaflow_md_base", _REAL_CHAIN, b"MODEL 1\nENDMDL\n")
+    _write_placeholder_sample(samples, "alphaflow_md_base", _REAL_CHAIN)
     app = create_app(Settings(cache_dir=tmp_path, kind="analysis", samples_dir=samples))
     body = TestClient(app).get(f"/chain/{_REAL_CHAIN}").text
     assert 'id="modelSel"' in body
@@ -102,15 +112,18 @@ def test_chain_page_without_sample_shows_no_samples_note(client: TestClient) -> 
     assert "no model samples cached for this chain" in body
 
 
-def test_sample_endpoint_returns_pdb_bytes(tmp_path: Path) -> None:
+def test_sample_endpoint_returns_aligned_pdb(tmp_path: Path) -> None:
+    # The toy reference bundle has 5 CA residues; the sample must match so the
+    # rigid alignment (CA Kabsch) is well-defined.
     _write_fake_bundle(tmp_path, _REAL_CHAIN, frames_per_replica=(3, 4, 5))
     samples = tmp_path / "samples"
-    _write_fake_sample(samples, "alphaflow_md_base", _REAL_CHAIN, b"MODEL 1\nENDMDL\n")
+    _write_real_sample(samples, "alphaflow_md_base", _REAL_CHAIN, n_residues=5)
     app = create_app(Settings(cache_dir=tmp_path, kind="analysis", samples_dir=samples))
     r = TestClient(app).get(f"/api/chain/{_REAL_CHAIN}/sample/alphaflow_md_base.pdb")
     assert r.status_code == 200
     assert r.headers["content-type"] == "chemical/x-pdb"
-    assert r.content == b"MODEL 1\nENDMDL\n"
+    text = r.content.decode("ascii")
+    assert text.count("\nMODEL ") + text.startswith("MODEL ") == 6  # frames preserved
 
 
 def test_sample_endpoint_missing_returns_404(client: TestClient) -> None:

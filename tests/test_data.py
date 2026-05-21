@@ -406,6 +406,36 @@ def test_load_sample_pdb_bytes_missing_raises(tmp_path: Path) -> None:
         load_sample_pdb_bytes("alphaflow_md_base", "nope_A", tmp_path)
 
 
+def test_build_aligned_sample_removes_rigid_body_tumbling(tmp_path: Path) -> None:
+    # Build a sample whose frames are ONE structure rotated/translated
+    # differently per frame (pure rigid-body tumbling, no internal change).
+    # After alignment all frames must coincide (residual ~0).
+    from premval.data.samples import _build_aligned_sample
+
+    base = make_full_atom_trajectory(n_frames=1, n_residues=6, seed=7)
+    base_xyz = base.xyz[0]
+    rng = np.random.default_rng(11)
+    frames = []
+    for _ in range(5):
+        # random rotation via QR, plus a random translation
+        q, _r = np.linalg.qr(rng.standard_normal((3, 3)))
+        if np.linalg.det(q) < 0:
+            q[:, 0] = -q[:, 0]
+        frames.append(base_xyz @ q.T + rng.standard_normal(3))
+    tumbling = md.Trajectory(np.stack(frames).astype(np.float32), base.topology)
+    sample_dir = tmp_path / "alphaflow_md_base"
+    sample_dir.mkdir(parents=True)
+    tumbling.save_pdb(str(sample_dir / "x_A.pdb"))
+
+    ca = base.topology.select("name CA")
+    ref_ca_nm = base_xyz[ca]  # align frame 0 onto the base structure's CA
+    aligned_path = _build_aligned_sample("alphaflow_md_base", "x_A", ref_ca_nm, tmp_path)
+    aligned = md.load(str(aligned_path)).atom_slice(ca)
+    # All frames are the same structure, so post-alignment they must match frame 0.
+    spread = np.sqrt(((aligned.xyz - aligned.xyz[0]) ** 2).sum(-1).mean())
+    assert spread < 1e-3, f"rigid-body tumbling not removed (spread={spread:.4f} nm)"
+
+
 def test_build_session_mounts_https_adapter() -> None:
     from requests.adapters import HTTPAdapter
 

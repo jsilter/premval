@@ -130,6 +130,35 @@ def compute_observables_from_traj(traj: md.Trajectory) -> ReferenceObservables:
     )
 
 
+def kabsch_matrix(
+    mobile: NDArray[np.floating], target: NDArray[np.floating]
+) -> NDArray[np.float64]:
+    """Return the 4x4 rigid transform mapping `mobile` onto `target` (min RMSD).
+
+    Standard Kabsch superposition (rotation + translation, no scaling,
+    reflection-corrected via the determinant sign). Both inputs are `(N, 3)`
+    point sets in the same units; the returned homogeneous matrix is in those
+    units and maps a column point `p` as `R @ p + t`.
+
+    Args:
+        mobile: Points to move, shape `(N, 3)`.
+        target: Points to align onto, shape `(N, 3)`.
+
+    Returns:
+        A `(4, 4)` homogeneous transform.
+    """
+    mc = mobile.mean(axis=0)
+    tc = target.mean(axis=0)
+    h = (mobile - mc).T @ (target - tc)
+    u, _s, vt = np.linalg.svd(h)
+    d = np.sign(np.linalg.det(vt.T @ u.T))
+    rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = rot
+    matrix[:3, 3] = tc - rot @ mc
+    return matrix
+
+
 def save_observables(obs: ReferenceObservables, path: Path) -> None:
     """Write observables to `path` as a `.npz` (creating parent dirs)."""
     path.parent.mkdir(parents=True, exist_ok=True)

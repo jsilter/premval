@@ -32,6 +32,33 @@ if TYPE_CHECKING:
 REFERENCE_SUBSAMPLE = 1000
 
 
+def prepare_matched_ca(
+    submission: md.Trajectory,
+    reference: md.Trajectory,
+) -> tuple[md.Trajectory, md.Trajectory, md.Trajectory]:
+    """Slice both trajectories to matched CA atoms and superpose onto the crystal.
+
+    Both ensembles are reduced to the CA atoms they share (matched by
+    `(chain.index, resSeq)`) and superposed onto the reference's first frame,
+    which serves as the crystal/origin. This is the shared input every panel
+    metric consumes; it is factored out of `score` so callers that need only a
+    subset of the panel (e.g. the port-fidelity gate, which omits the
+    memory-heavy contact metric) reuse the exact same alignment.
+
+    Args:
+        submission: Submission ensemble.
+        reference: Reference ensemble; frame 0 is the crystal origin.
+
+    Returns:
+        `(ref_ca, sub_ca, crystal_ca)`, all superposed onto `crystal_ca`.
+    """
+    ref_ca_idx, sub_ca_idx = select_matched_ca(reference, submission)
+    ref_ca = reference.atom_slice(ref_ca_idx)
+    sub_ca = submission.atom_slice(sub_ca_idx)
+    crystal_ca = ref_ca[0]
+    return ref_ca.superpose(crystal_ca), sub_ca.superpose(crystal_ca), crystal_ca
+
+
 def score(
     submission: md.Trajectory,
     reference: md.Trajectory,
@@ -56,13 +83,7 @@ def score(
         `weak_contacts_jaccard`, `transient_contacts_jaccard`) and the
         raw RMWD components (`emd_mean_rms`, `emd_var_rms`).
     """
-    ref_ca_idx, sub_ca_idx = select_matched_ca(reference, submission)
-    ref_ca = reference.atom_slice(ref_ca_idx)
-    sub_ca = submission.atom_slice(sub_ca_idx)
-    crystal_ca = ref_ca[0]
-
-    ref_ca = ref_ca.superpose(crystal_ca)
-    sub_ca = sub_ca.superpose(crystal_ca)
+    ref_ca, sub_ca, crystal_ca = prepare_matched_ca(submission, reference)
 
     rmsf_out = rmsf_correlation(ref_ca, sub_ca, crystal_ca)
     rmwd_out = rmwd(ref_ca.xyz, sub_ca.xyz, reference_subsample_size=REFERENCE_SUBSAMPLE)

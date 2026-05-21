@@ -11,11 +11,40 @@ from premval.data.references import (
     ReferenceObservables,
     cache_path,
     compute_observables_from_traj,
+    kabsch_matrix,
     load_observables,
     load_reference_observables,
     save_observables,
 )
 from tests.test_data import make_full_atom_trajectory
+
+
+class TestKabsch:
+    def test_recovers_known_rigid_transform(self) -> None:
+        rng = np.random.default_rng(0)
+        pts = rng.standard_normal((12, 3))
+        # A known rotation (90 deg about z) + translation.
+        rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        trans = np.array([3.0, -2.0, 1.0])
+        target = pts @ rot.T + trans
+        m = kabsch_matrix(pts, target)
+        moved = pts @ m[:3, :3].T + m[:3, 3]
+        np.testing.assert_allclose(moved, target, atol=1e-9)
+
+    def test_identity_for_same_points(self) -> None:
+        rng = np.random.default_rng(1)
+        pts = rng.standard_normal((8, 3))
+        m = kabsch_matrix(pts, pts)
+        np.testing.assert_allclose(m, np.eye(4), atol=1e-9)
+
+    def test_no_reflection(self) -> None:
+        # Even for a mirrored target, Kabsch must return a proper rotation
+        # (det = +1), not a reflection.
+        rng = np.random.default_rng(2)
+        pts = rng.standard_normal((20, 3))
+        mirrored = pts * np.array([1.0, 1.0, -1.0])
+        m = kabsch_matrix(pts, mirrored)
+        assert np.linalg.det(m[:3, :3]) > 0
 
 
 def _make_obs_from_traj(traj: md.Trajectory, tmp_path: Path) -> ReferenceObservables:

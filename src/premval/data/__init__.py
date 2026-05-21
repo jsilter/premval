@@ -30,9 +30,11 @@ from premval.data.rcsb import (
 )
 from premval.data.references import ReferenceObservables, load_reference_observables
 from premval.data.samples import (
+    aligned_sample_path,
     available_chains,
     available_models,
     default_samples_dir,
+    load_aligned_sample_pdb_bytes,
     load_sample_observables,
     load_sample_pdb_bytes,
     sample_observables_path,
@@ -46,6 +48,7 @@ __all__ = [
     "AtlasKind",
     "PublishedSource",
     "ReferenceObservables",
+    "aligned_sample_path",
     "assembly_cache_path",
     "available_chains",
     "available_models",
@@ -55,6 +58,7 @@ __all__ = [
     "fetch_assembly_pdb",
     "fetch_published",
     "fetch_val_split",
+    "load_aligned_sample_pdb_bytes",
     "load_assembly_bytes",
     "load_chain_trajectory",
     "load_ensemble_pdb_bytes",
