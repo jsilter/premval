@@ -24,8 +24,11 @@ from premval.data.atlas import (
 )
 from premval.data.published import PUBLISHED_SOURCES, PublishedSource, fetch_published
 from premval.data.rcsb import (
+    EntryMetadata,
     assembly_cache_path,
+    entry_metadata_cache_path,
     fetch_assembly_pdb,
+    fetch_entry_metadata,
     load_assembly_bytes,
 )
 from premval.data.references import ReferenceObservables, load_reference_observables
@@ -46,16 +49,19 @@ __all__ = [
     "ATLAS_REPLICAS",
     "PUBLISHED_SOURCES",
     "AtlasKind",
+    "EntryMetadata",
     "PublishedSource",
     "ReferenceObservables",
     "aligned_sample_path",
     "assembly_cache_path",
+    "entry_metadata_cache_path",
     "available_chains",
     "available_models",
     "bundle_path",
     "default_cache_dir",
     "default_samples_dir",
     "fetch_assembly_pdb",
+    "fetch_entry_metadata",
     "fetch_published",
     "fetch_val_split",
     "load_aligned_sample_pdb_bytes",

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 import numpy as np
+import requests
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -42,6 +43,7 @@ from premval.data import (
     bundle_path,
     default_cache_dir,
     default_samples_dir,
+    fetch_entry_metadata,
     load_aligned_sample_pdb_bytes,
     load_ensemble_pdb_bytes,
     load_reference_observables,
@@ -333,5 +335,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_cached(chain, settings)
         refs = load_reference_observables(chain, kind=settings.kind, cache_dir=settings.cache_dir)
         return JSONResponse(_build_observables_dict(refs, dmax_nm=dmax_nm))
+
+    @app.get("/api/chain/{chain}/metadata.json")
+    def metadata_json(chain: str, settings: SettingsDep) -> JSONResponse:
+        # Curated RCSB entry metadata for the chain's parent structure. The
+        # PDB entry id is the 4-char prefix of the chain id (e.g. 6o2v_A ->
+        # 6o2v). Fetched from data.rcsb.org on first request, then cached.
+        pdb_id = chain.split("_", 1)[0]
+        try:
+            meta = fetch_entry_metadata(pdb_id, cache_dir=settings.cache_dir)
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502, detail=f"RCSB metadata fetch failed: {exc}"
+            ) from exc
+        return JSONResponse(meta.to_dict())
 
     return app

@@ -87,6 +87,14 @@
     </select></label>
   <span id="overlayHint" style="color:#777"></span>
 </div>
+<div id="metaPanel" style="margin-top:24px;max-width:780px;border:1px solid #ddd;
+                           border-radius:4px;padding:12px 16px;
+                           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                           font-size:13px;color:#333">
+  <div id="metaStatus" style="color:#777">loading structure metadata...</div>
+  <dl id="metaList" style="display:grid;grid-template-columns:max-content 1fr;
+                           gap:4px 14px;margin:0"></dl>
+</div>
 <details style="margin-top:24px;max-width:780px">
   <summary style="cursor:pointer;color:#555;font-weight:600;
                   padding:6px 0;user-select:none">
@@ -560,5 +568,61 @@
     modelSel.addEventListener("change", () => loadSampleModel(modelSel.value));
     loadSampleModel(modelSel.value);
   }
+
+  // ---- structure metadata (RCSB entry record for the chain's parent PDB) ----
+  (function loadMetadata() {
+    const status = document.getElementById("metaStatus");
+    const list = document.getElementById("metaList");
+    const addRow = (label, node) => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      dt.style.color = "#777";
+      const dd = document.createElement("dd");
+      dd.style.margin = "0";
+      dd.append(node);
+      list.append(dt, dd);
+    };
+    const link = (text, href) => {
+      const a = document.createElement("a");
+      a.textContent = text; a.href = href; a.target = "_blank"; a.rel = "noopener";
+      return a;
+    };
+    fetch("/api/chain/{{ active_chain }}/metadata.json").then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(m => {
+      status.style.display = "none";
+      if (m.title) addRow("Title", document.createTextNode(m.title));
+      addRow("PDB", link(m.pdb_id.toUpperCase(), m.url));
+      if (m.method) addRow("Method", document.createTextNode(m.method));
+      if (m.resolution_a != null)
+        addRow("Resolution", document.createTextNode(m.resolution_a.toFixed(2) + " Å"));
+      if (m.molecular_weight_kda != null)
+        addRow("Mol. weight", document.createTextNode(m.molecular_weight_kda.toFixed(1) + " kDa"));
+      if (m.keywords) addRow("Keywords", document.createTextNode(m.keywords));
+      if (m.deposit_date) addRow("Deposited", document.createTextNode(m.deposit_date));
+      if (m.release_date) addRow("Released", document.createTextNode(m.release_date));
+      if (m.citation_title) {
+        const cite = document.createElement("span");
+        cite.append(document.createTextNode(m.citation_title));
+        const bits = [];
+        if (m.citation_journal) bits.push(m.citation_journal);
+        if (m.citation_year) bits.push(m.citation_year);
+        if (bits.length) cite.append(" (" + bits.join(" ") + ")");
+        if (m.citation_doi) { cite.append(" "); cite.append(link("doi", "https://doi.org/" + m.citation_doi)); }
+        if (m.citation_authors && m.citation_authors.length) {
+          const auth = document.createElement("div");
+          auth.style.color = "#777";
+          auth.textContent = m.citation_authors.join(", ");
+          cite.append(auth);
+        }
+        addRow("Citation", cite);
+      }
+    }).catch(err => {
+      status.textContent = "structure metadata unavailable: " + err.message;
+      status.style.color = "#b00";
+      console.warn("metadata fetch failed:", err);
+    });
+  })();
 </script>
 {% endblock %}

@@ -7,6 +7,7 @@ is the bundle factory.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,30 @@ def test_ensemble_endpoint_returns_multi_model_pdb(client: TestClient) -> None:
 def test_ensemble_endpoint_uncached_returns_404(client: TestClient) -> None:
     r = client.get(f"/api/chain/{_UNCACHED_REAL_CHAIN}/ensemble.pdb")
     assert r.status_code == 404
+
+
+def test_metadata_endpoint_serves_cached_entry(client: TestClient, tmp_path: Path) -> None:
+    # Seed the metadata cache so the endpoint serves it without hitting RCSB.
+    # The PDB entry id is the 4-char prefix of the chain (6e33_A -> 6e33).
+    from premval.data.rcsb import EntryMetadata, entry_metadata_cache_path
+
+    meta = EntryMetadata(
+        pdb_id="6e33",
+        url="https://www.rcsb.org/structure/6e33",
+        title="Test entry",
+        method="X-ray",
+        resolution_a=1.9,
+    )
+    cache = entry_metadata_cache_path("6e33", tmp_path)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(meta.to_dict()))
+
+    r = client.get(f"/api/chain/{_REAL_CHAIN}/metadata.json")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pdb_id"] == "6e33"
+    assert body["title"] == "Test entry"
+    assert body["resolution_a"] == 1.9
 
 
 def test_settings_from_env_reads_cache_dir(monkeypatch: pytest.MonkeyPatch) -> None:
