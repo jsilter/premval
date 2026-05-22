@@ -29,6 +29,9 @@ it never silently joins the unit suite. Run with:
 The contact-Jaccard metric is deliberately omitted here: it materializes an
 (n_frames, n_residues, n_residues, 3) array that exceeds memory on the largest
 ATLAS chains, so this gate uses only the three metrics it asserts on.
+
+The full comparison (method, distribution, per-target table, outlier analysis)
+is written up in plans/PORT_FIDELITY.md.
 """
 
 from __future__ import annotations
