@@ -48,7 +48,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 
-from common import track_sample, write_telemetry
+from common import track_sample, wandb_run, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -98,20 +98,23 @@ def _sample_chain(sequence: str, n_samples: int, dest: Path) -> None:
 def _run(split: str, chains: list[str], out_model: str, n_samples: int, samples_dir: Path) -> None:
     """Sample each chain that has no cached output yet (resumable)."""
     seqres = _seqres(split)
-    for chain in chains:
-        dest = sample_path(out_model, chain, samples_dir)
-        if dest.exists():
-            print(f"skip {chain}: {dest} already exists")
-            continue
-        if chain not in seqres:
-            raise KeyError(f"chain {chain!r} not in {split} split CSV")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        print(f"sample {chain}: {n_samples} structures -> {dest}")
-        with track_sample(chain, n_samples) as sink:
-            _sample_chain(seqres[chain], n_samples, dest)
-        telemetry = sink[0]
-        write_telemetry(dest, telemetry)
-        print(telemetry.summary())
+    config = {"model": out_model, "split": split, "n_samples": n_samples}
+    with wandb_run(out_model, split, config) as logger:
+        for chain in chains:
+            dest = sample_path(out_model, chain, samples_dir)
+            if dest.exists():
+                print(f"skip {chain}: {dest} already exists")
+                continue
+            if chain not in seqres:
+                raise KeyError(f"chain {chain!r} not in {split} split CSV")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            print(f"sample {chain}: {n_samples} structures -> {dest}")
+            with track_sample(chain, n_samples) as sink:
+                _sample_chain(seqres[chain], n_samples, dest)
+            telemetry = sink[0]
+            write_telemetry(dest, telemetry)
+            logger.log(telemetry)
+            print(telemetry.summary())
 
 
 def _self_test(split: str, n_samples: int, samples_dir: Path) -> None:

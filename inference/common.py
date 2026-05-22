@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 _BYTES_PER_MB = 1024 * 1024
 _DEFAULT_POLL_INTERVAL_S = 0.5
@@ -189,6 +191,69 @@ def _finalize(
         gpu_mean_mb=mean_mb,
         gpu_poll_count=len(polls),
     )
+
+
+class TelemetryLogger:
+    """Forwards per-chain telemetry to a Weights & Biases run, or no-ops.
+
+    Constructed by `wandb_run`. When wandb logging is disabled (the common
+    case: no ``WANDB_PROJECT``), it holds ``None`` and every `log` call is a
+    cheap no-op, so the harness loop is wandb-agnostic. The JSON sidecars remain
+    the source of truth either way; wandb just adds live charts and, for free, a
+    GPU/system-metrics panel while the run is active.
+    """
+
+    def __init__(self, run: Any | None) -> None:
+        self._run = run
+
+    def log(self, telemetry: SampleTelemetry) -> None:
+        """Log one chain's telemetry as a wandb step (no-op if disabled)."""
+        if self._run is None:
+            return
+        metrics: dict[str, Any] = {
+            "chain": telemetry.chain,
+            "wall_seconds": telemetry.wall_seconds,
+            "seconds_per_sample": telemetry.seconds_per_sample,
+        }
+        if telemetry.gpu_peak_mb is not None:
+            metrics["gpu_peak_mb"] = telemetry.gpu_peak_mb
+            metrics["gpu_mean_mb"] = telemetry.gpu_mean_mb
+        self._run.log(metrics)
+
+
+@contextmanager
+def wandb_run(
+    model: str,
+    split: str,
+    config: dict[str, Any] | None = None,
+) -> Iterator[TelemetryLogger]:
+    """Open a wandb run for a harness invocation if ``WANDB_PROJECT`` is set.
+
+    Optional and off by default. Logging is enabled only when ``WANDB_PROJECT``
+    is in the environment; wandb then authenticates the usual way (``WANDB_API_KEY``
+    or a prior ``wandb login``). When disabled, yields a no-op `TelemetryLogger`
+    so callers need no conditional. wandb is imported lazily here so the harnesses
+    (and ``--self-test``) keep running on an install without wandb present.
+
+    Args:
+        model: Out-model / samples-cache key, used in the run name.
+        split: ATLAS split being sampled, used in the run name.
+        config: Optional run config recorded as wandb hyperparameters.
+
+    Yields:
+        A `TelemetryLogger` (live when enabled, no-op otherwise).
+    """
+    if not os.environ.get("WANDB_PROJECT"):
+        yield TelemetryLogger(None)
+        return
+
+    import wandb
+
+    run = wandb.init(name=f"{model}-{split}", config=config or {}, job_type="inference")
+    try:
+        yield TelemetryLogger(run)
+    finally:
+        wandb.finish()
 
 
 def telemetry_path(sample_pdb: Path) -> Path:

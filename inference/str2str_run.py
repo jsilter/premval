@@ -83,7 +83,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import mdtraj as md
 
-from common import track_sample, write_telemetry
+from common import track_sample, wandb_run, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -274,18 +274,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.str2str_repo is None:
         raise SystemExit("--str2str-repo (or STR2STR_REPO) is required for a real run")
 
-    for chain in chains:
-        dest = sample_path(args.out_model, chain, samples_dir)
-        if dest.exists():
-            print(f"skip {chain}: already at {dest}")
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        print(f"sampling {chain} -> {dest}")
-        with track_sample(chain, args.n_samples) as sink:
-            sample_chain(chain, dest, args.n_samples, args.str2str_repo)
-        telemetry = sink[0]
-        write_telemetry(dest, telemetry)
-        print(telemetry.summary())
+    config = {"model": args.out_model, "split": args.split, "n_samples": args.n_samples}
+    with wandb_run(args.out_model, args.split, config) as logger:
+        for chain in chains:
+            dest = sample_path(args.out_model, chain, samples_dir)
+            if dest.exists():
+                print(f"skip {chain}: already at {dest}")
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            print(f"sampling {chain} -> {dest}")
+            with track_sample(chain, args.n_samples) as sink:
+                sample_chain(chain, dest, args.n_samples, args.str2str_repo)
+            telemetry = sink[0]
+            write_telemetry(dest, telemetry)
+            logger.log(telemetry)
+            print(telemetry.summary())
     return 0
 
 

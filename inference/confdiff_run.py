@@ -85,7 +85,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from common import track_sample, write_telemetry
+from common import track_sample, wandb_run, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -219,23 +219,26 @@ def run(
     repo = _repo_path()
     ckpt = _checkpoint_path(checkpoint)
 
-    for chain in chains:
-        dest = sample_path(out_model, chain, samples_dir)
-        if dest.exists():
-            print(f"skip {chain}: {dest} exists")
-            continue
-        seq = seqres.get(chain)
-        if seq is None:
-            raise SystemExit(f"no seqres for chain {chain!r} in split {split!r}")
-        print(f"sample {chain} ({len(seq)} residues) -> {dest}")
-        with track_sample(chain, n_samples) as sink:
-            traj = _sample_chain(chain, seq, ckpt, repo, n_samples)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        traj.save_pdb(str(dest))
-        telemetry = sink[0]
-        write_telemetry(dest, telemetry)
-        print(f"wrote {dest} ({traj.n_frames} frames)")
-        print(telemetry.summary())
+    config = {"model": out_model, "split": split, "checkpoint": checkpoint, "n_samples": n_samples}
+    with wandb_run(out_model, split, config) as logger:
+        for chain in chains:
+            dest = sample_path(out_model, chain, samples_dir)
+            if dest.exists():
+                print(f"skip {chain}: {dest} exists")
+                continue
+            seq = seqres.get(chain)
+            if seq is None:
+                raise SystemExit(f"no seqres for chain {chain!r} in split {split!r}")
+            print(f"sample {chain} ({len(seq)} residues) -> {dest}")
+            with track_sample(chain, n_samples) as sink:
+                traj = _sample_chain(chain, seq, ckpt, repo, n_samples)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            traj.save_pdb(str(dest))
+            telemetry = sink[0]
+            write_telemetry(dest, telemetry)
+            logger.log(telemetry)
+            print(f"wrote {dest} ({traj.n_frames} frames)")
+            print(telemetry.summary())
 
 
 def _synthetic_traj(n_residues: int, n_frames: int) -> md.Trajectory:

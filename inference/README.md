@@ -82,6 +82,26 @@ without re-running anything. `--self-test` writes a sidecar too (CPU, so the
 GPU fields are `null`), which is how the telemetry path is verified without a
 GPU.
 
+### Optional: Weights & Biases
+
+The same per-chain telemetry can also stream to a wandb run. It is **off by
+default** and enabled purely by environment — set `WANDB_PROJECT` (and
+authenticate with `WANDB_API_KEY` or a prior `wandb login`) before launching a
+harness:
+
+```bash
+export WANDB_API_KEY=...        # or run `wandb login` once
+export WANDB_PROJECT=premval-inference
+python inference/bioemu_run.py --split val
+```
+
+Each harness invocation becomes one wandb run named `{out_model}-{split}`;
+every chain logs `wall_seconds`, `seconds_per_sample`, and (on GPU)
+`gpu_peak_mb` / `gpu_mean_mb`, and wandb additionally captures its own
+GPU/system-metrics panel for the duration. When `WANDB_PROJECT` is unset the
+logger is a no-op, the JSON sidecars are unaffected, and `wandb` need not be
+installed (it is imported lazily, only when enabled).
+
 ## Per-model harnesses
 
 ### Str2Str (`str2str_run.py`)
