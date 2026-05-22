@@ -72,6 +72,7 @@ Run command
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -81,6 +82,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import mdtraj as md
+
+from common import track_sample, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -219,7 +222,10 @@ def _self_test(chains: list[str], n_samples: int, samples_dir: Path) -> None:
 
         dest = sample_path(DEFAULT_OUT_MODEL, chain, samples_dir)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        synthetic.save_pdb(str(dest))
+        with track_sample(chain, n_samples) as sink:
+            synthetic.save_pdb(str(dest))
+        telemetry = sink[0]
+        sidecar = write_telemetry(dest, telemetry)
 
         assert dest == sample_path(DEFAULT_OUT_MODEL, chain, samples_dir)
         assert dest.exists(), f"{chain}: nothing written at {dest}"
@@ -227,7 +233,11 @@ def _self_test(chains: list[str], n_samples: int, samples_dir: Path) -> None:
         assert reloaded.n_frames == n_samples, (
             f"{chain}: wrote {n_samples} frames but reloaded {reloaded.n_frames}"
         )
+        assert sidecar.exists(), f"{chain}: no telemetry sidecar at {sidecar}"
+        recorded = json.loads(sidecar.read_text())
+        assert recorded["chain"] == chain and recorded["wall_seconds"] >= 0.0
         print(f"PASS self-test {chain}: {reloaded.n_frames} frames at {dest}")
+        print(f"  {telemetry.summary()}")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -271,7 +281,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         print(f"sampling {chain} -> {dest}")
-        sample_chain(chain, dest, args.n_samples, args.str2str_repo)
+        with track_sample(chain, args.n_samples) as sink:
+            sample_chain(chain, dest, args.n_samples, args.str2str_repo)
+        telemetry = sink[0]
+        write_telemetry(dest, telemetry)
+        print(telemetry.summary())
     return 0
 
 

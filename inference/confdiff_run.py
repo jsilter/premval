@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -83,6 +84,8 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from common import track_sample, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -225,10 +228,14 @@ def run(
         if seq is None:
             raise SystemExit(f"no seqres for chain {chain!r} in split {split!r}")
         print(f"sample {chain} ({len(seq)} residues) -> {dest}")
-        traj = _sample_chain(chain, seq, ckpt, repo, n_samples)
+        with track_sample(chain, n_samples) as sink:
+            traj = _sample_chain(chain, seq, ckpt, repo, n_samples)
         dest.parent.mkdir(parents=True, exist_ok=True)
         traj.save_pdb(str(dest))
+        telemetry = sink[0]
+        write_telemetry(dest, telemetry)
         print(f"wrote {dest} ({traj.n_frames} frames)")
+        print(telemetry.summary())
 
 
 def _synthetic_traj(n_residues: int, n_frames: int) -> md.Trajectory:
@@ -266,13 +273,18 @@ def _self_test(split: str, n_samples: int, samples_dir: Path) -> int:
         traj = _synthetic_traj(len(seq), n_samples)
         dest = sample_path(out_model, chain, samples_dir)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        traj.save_pdb(str(dest))
+        with track_sample(chain, n_samples) as sink:
+            traj.save_pdb(str(dest))
+        sidecar = write_telemetry(dest, sink[0])
 
         assert dest == sample_path(out_model, chain, samples_dir)
         reloaded = load_ensemble(dest)
         assert reloaded.n_frames == n_samples, (
             f"{chain}: expected {n_samples} frames, got {reloaded.n_frames}"
         )
+        assert sidecar.exists(), f"{chain}: no telemetry sidecar at {sidecar}"
+        recorded = json.loads(sidecar.read_text())
+        assert recorded["chain"] == chain and recorded["wall_seconds"] >= 0.0
         print(f"  {chain}: {reloaded.n_frames} frames at {dest}")
 
     print(f"SELF-TEST PASS: {len(chains)} chains, {n_samples} frames each, out-model defaults OK")

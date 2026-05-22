@@ -41,11 +41,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 import tempfile
 from importlib import resources
 from pathlib import Path
+
+from common import track_sample, write_telemetry
 
 from premval.data import (
     default_samples_dir,
@@ -104,7 +107,11 @@ def _run(split: str, chains: list[str], out_model: str, n_samples: int, samples_
             raise KeyError(f"chain {chain!r} not in {split} split CSV")
         dest.parent.mkdir(parents=True, exist_ok=True)
         print(f"sample {chain}: {n_samples} structures -> {dest}")
-        _sample_chain(seqres[chain], n_samples, dest)
+        with track_sample(chain, n_samples) as sink:
+            _sample_chain(seqres[chain], n_samples, dest)
+        telemetry = sink[0]
+        write_telemetry(dest, telemetry)
+        print(telemetry.summary())
 
 
 def _self_test(split: str, n_samples: int, samples_dir: Path) -> None:
@@ -134,11 +141,16 @@ def _self_test(split: str, n_samples: int, samples_dir: Path) -> None:
 
         dest = sample_path(DEFAULT_OUT_MODEL, chain, samples_dir)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        traj.save_pdb(str(dest))
+        with track_sample(chain, n_samples) as sink:
+            traj.save_pdb(str(dest))
+        sidecar = write_telemetry(dest, sink[0])
 
         assert dest.exists(), f"{chain}: nothing written at expected path {dest}"
         reloaded = load_ensemble(dest)
         assert reloaded.n_frames == n_samples, f"{chain}: {reloaded.n_frames} != {n_samples}"
+        assert sidecar.exists(), f"{chain}: no telemetry sidecar at {sidecar}"
+        recorded = json.loads(sidecar.read_text())
+        assert recorded["chain"] == chain and recorded["wall_seconds"] >= 0.0
 
     print(
         f"PASS self-test: {len(chains)} chain(s), {n_samples} frames each, wrote to {samples_dir}"

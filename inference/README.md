@@ -58,6 +58,30 @@ booking GPU time. Point it at a scratch dir to avoid polluting the cache:
 PREMVAL_SAMPLES_DIR=$(mktemp -d) python inference/str2str_run.py --self-test
 ```
 
+## Run telemetry
+
+Every harness records basic telemetry per chain via the shared
+[`common.py`](common.py) helper and writes a JSON sidecar next to each sample
+PDB: `~/.cache/premval/samples/{out_model}/{chain}.telemetry.json`. It captures
+wall time (and per-sample seconds) and, when a CUDA device is present, peak and
+time-averaged GPU memory — the same numbers a wandb/Modal system panel would
+surface, captured locally so the harnesses keep their no-extra-deps,
+no-account, no-network property. Fields:
+
+| field | meaning |
+|-------|---------|
+| `chain`, `n_samples` | chain id and frames generated |
+| `wall_seconds`, `seconds_per_sample` | sampling wall time and its per-frame rate |
+| `device` | CUDA device name, or `cpu` when no GPU was used |
+| `gpu_peak_mb`, `gpu_mean_mb` | peak / background-polled mean allocated GPU memory (`null` on CPU) |
+| `gpu_poll_count` | number of memory polls (0 on CPU, or if sampling finished within one poll interval) |
+
+A one-line summary is also printed to stdout per chain. The sidecars are the
+machine-readable source of truth: a later dashboard reader can aggregate them
+without re-running anything. `--self-test` writes a sidecar too (CPU, so the
+GPU fields are `null`), which is how the telemetry path is verified without a
+GPU.
+
 ## Per-model harnesses
 
 ### Str2Str (`str2str_run.py`)
