@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>premval</title>
+  <style>
+    :root { --fg: #1c1c1e; --muted: #8a8a8e; --accent: #2d6cdf;
+            --accent2: #7b3fe4; --line: #e6e6e6; }
+    * { box-sizing: border-box; }
+    body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+           sans-serif; color: var(--fg); margin: 0; min-height: 100vh;
+           background: linear-gradient(180deg, #f1f4fb 0%, #fafafa 38%);
+           display: flex; flex-direction: column; align-items: center;
+           padding: 104px 24px 56px; }
+
+    /* GitHub mark pinned to the corner as a "view source" affordance. */
+    .gh { position: fixed; top: 20px; right: 24px; color: var(--muted);
+          display: inline-flex; transition: color .15s; }
+    .gh:hover { color: var(--fg); }
+    .gh svg { width: 26px; height: 26px; fill: currentColor; }
+
+    .hero { text-align: center; margin-bottom: 44px; }
+    .hero h1 { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+               font-size: 56px; letter-spacing: 0.16em; font-weight: 700;
+               margin: 0; line-height: 1;
+               background: linear-gradient(135deg, var(--accent), var(--accent2));
+               -webkit-background-clip: text; background-clip: text;
+               color: transparent; }
+    .tagline { color: var(--muted); margin: 16px auto 0; max-width: 460px;
+               line-height: 1.55; }
+
+    .board { width: 100%; max-width: 680px; text-align: center; }
+    .board h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;
+                color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+    table.lb { border-collapse: collapse; width: auto; margin: 0 auto; background: white;
+               border: 1px solid var(--line); border-radius: 8px;
+               overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+               font-variant-numeric: tabular-nums; }
+    table.lb th, table.lb td { padding: 10px 18px; text-align: right;
+                               white-space: nowrap; border-bottom: 1px solid #f1f1f1; }
+    table.lb thead { background: var(--accent); }
+    table.lb th { color: rgba(255, 255, 255, 0.92); font-weight: 600;
+                  font-size: 12px; border-bottom: none; }
+    table.lb th.model, table.lb td.model { text-align: left;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    table.lb td.model a { color: var(--accent); text-decoration: none; }
+    table.lb td.model a:hover { text-decoration: underline; }
+    /* Header metrics carry a hover tooltip (title); hint it visually. */
+    table.lb th.tip { cursor: help;
+        text-decoration: underline dotted rgba(255, 255, 255, 0.55);
+        text-underline-offset: 3px; }
+    table.lb th.grp { border-left: 1px solid rgba(255, 255, 255, 0.3); }
+    table.lb td.grp { border-left: 1px solid var(--line); }
+    table.lb tbody tr:last-child td { border-bottom: none; }
+    /* Emphasize the top-ranked model so the table reads as a ranking. */
+    table.lb tr.rank1 { font-weight: 700; }
+    table.lb tr.rank1 td { background: rgba(45, 108, 223, 0.07); }
+
+    /* Held-out badge: how strong is the ATLAS held-out guarantee? */
+    table.lb td.data { text-align: left; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600;
+             padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+             cursor: help; }
+    .badge.held_out { color: #1a7f4b; background: rgba(26, 127, 75, 0.12); }
+    .badge.weak_holdout { color: #b8860b; background: rgba(184, 134, 11, 0.14); }
+    .badge.uncertain { color: #6b6b70; background: rgba(120, 120, 128, 0.12); }
+
+    .empty { color: var(--muted); font-style: italic; text-align: center;
+             padding: 22px; }
+    .legend { margin: 12px 0 0; color: var(--muted); font-size: 12px;
+              line-height: 1.7; text-align: center; }
+    .legend strong { color: var(--fg); font-weight: 600; }
+    .browse { display: block; width: max-content; margin: 24px auto 0;
+              padding: 9px 22px; background: var(--accent); color: white;
+              text-decoration: none; font-size: 14px; font-weight: 600;
+              border-radius: 6px; transition: background .15s; }
+    .browse:hover { background: #2257c0; }
+    .note { text-align: center; margin-top: 14px; color: var(--muted);
+            font-size: 12.5px; }
+    .note a { color: var(--accent); text-decoration: none; }
+    .note a:hover { text-decoration: underline; }
+    .refs { margin-top: 30px; text-align: left; }
+    .refs h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;
+               color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+    .refs ol { margin: 0; padding-left: 22px; color: var(--muted);
+               font-size: 12.5px; line-height: 1.6; }
+    .refs li { margin: 4px 0; }
+    .refs a { color: var(--accent); text-decoration: none; }
+    .refs a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <a class="gh" href="{{ github_url }}" title="View on GitHub" aria-label="GitHub repository">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+  </a>
+
+  <div class="hero">
+    <h1>PREMVAL</h1>
+    <p class="tagline">Benchmarking generative models of protein conformational
+      ensembles against all-atom molecular dynamics.</p>
+  </div>
+
+  {% set t_rmwd = "Root-mean Wasserstein distance (Å) between reference and sample Cα position distributions; lower is closer." %}
+  {% set t_rmsf = "Pearson correlation of per-residue RMSF (flexibility) profiles; higher is better." %}
+  {% set t_n = "Number of chains scored in this split." %}
+  {% set t_time = "Median wall-clock inference time per chain (seconds); device-dependent, lower is faster." %}
+  {% set t_data = "How strong the ATLAS held-out guarantee is (green = held out, never trained on ATLAS/MD; amber = held out but split is temporal only; grey = uncertain)." %}
+  <div class="board">
+    <h2>Leaderboard</h2>
+    <table class="lb">
+      <thead>
+        <tr>
+          <th class="model">Model</th>
+          <th class="tip" title="{{ t_data }}">Data</th>
+          <th class="tip" title="{{ t_rmwd }}">RMWD&nbsp;&darr;</th>
+          <th class="tip" title="{{ t_rmsf }}">RMSF&nbsp;r&nbsp;&uarr;</th>
+          <th class="tip" title="{{ t_time }}">Time/chain&nbsp;&darr;</th>
+          <th class="tip" title="{{ t_n }}">N</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not leaderboard %}
+        <tr><td colspan="6" class="empty">no scored submissions yet</td></tr>
+        {% else %}
+        {% for row in leaderboard %}
+        {% set avg = row["test"] %}
+        <tr{% if loop.first %} class="rank1"{% endif %}>
+          <td class="model">{% if row.url %}<a href="{{ row.url }}" title="{{ row.desc }}" target="_blank" rel="noopener">{{ row.name }}</a>{% else %}<span title="{{ row.desc or '' }}">{{ row.name }}</span>{% endif %}</td>
+          {% set badge_label = {"held_out": "held-out", "weak_holdout": "held-out (weak)", "uncertain": "uncertain"} %}
+          <td class="data"><span class="badge {{ row.contamination }}" title="{{ row.contamination_basis }}">{{ badge_label[row.contamination] }}</span></td>
+          <td>{{ "%.2f"|format(avg.rmwd) if avg and avg.rmwd is not none else "n/a" }}</td>
+          <td>{{ "%.3f"|format(avg.rmsf_pearson) if avg and avg.rmsf_pearson is not none else "n/a" }}</td>
+          <td>{{ "%.0fs"|format(avg.wall_seconds) if avg and avg.get("wall_seconds") is not none else "n/a" }}</td>
+          <td>{{ avg.n_chains if avg else "n/a" }}</td>
+        </tr>
+        {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+    <p class="legend">
+      <strong>RMWD</strong> root-mean Wasserstein distance (&Aring;), lower is better &middot;
+      <strong>RMSF&nbsp;r</strong> per-residue flexibility correlation, higher is better &middot;
+      <strong>Time/chain</strong> median inference time per chain (s), lower is faster &middot;
+      <strong>N</strong> chains scored
+    </p>
+    <p class="legend">
+      <strong>Data</strong> how strong is the ATLAS held-out guarantee? &middot;
+      <span class="badge held_out">held-out</span> never trained on ATLAS/MD &middot;
+      <span class="badge weak_holdout">held-out (weak)</span> trained on ATLAS train, temporal split only &middot;
+      <span class="badge uncertain">uncertain</span> unknown
+    </p>
+    {% if browse_url %}
+    <a class="browse" href="{{ browse_url }}">Browse chains &rarr;</a>
+    {% endif %}
+    <p class="note">Scored on the ATLAS test split, against all-atom MD trajectories from the
+      <a href="{{ references[-1].url }}" target="_blank" rel="noopener">ATLAS dataset</a>.</p>
+
+    <div class="refs">
+      <h2>References</h2>
+      <ol>
+        {% for ref in references %}
+        <li>{{ ref.citation }}
+          <a href="{{ ref.url }}" target="_blank" rel="noopener">[link]</a></li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

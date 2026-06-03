@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ chain }} not cached - premval{% endblock %}
+{% block content %}
+<h2>{{ chain }}</h2>
+<div style="max-width:640px;border:1px solid #e0c0c0;background:#fdf6f6;
+            border-radius:4px;padding:16px 20px;color:#733;
+            font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px">
+  <p style="margin-top:0"><strong>No cached data for this chain.</strong></p>
+  <p>{{ detail }}</p>
+  <p style="margin-bottom:0;color:#955">
+    Pick a chain from the sidebar that isn't dimmed, or fetch this one and reload.
+  </p>
+</div>
+{% endblock %}

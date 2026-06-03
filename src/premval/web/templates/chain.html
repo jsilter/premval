@@ -1,0 +1,739 @@
+{% extends "base.html" %}
+{% block title %}{{ active_chain }} - premval{% endblock %}
+{% block content %}
+<h2>{{ active_chain }}</h2>
+<p>
+  Reference trajectory from ATLAS (subsampled to 250 frames).
+  <a href="{{ topology_url }}" download>topology.pdb</a> &middot;
+  <a href="{{ ensemble_url }}" download>ensemble.pdb</a>
+</p>
+<div id="compareRow" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;
+                            font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+  <div style="flex:1 1 360px;min-width:0">
+    <div style="padding:4px 0;color:#555;font-weight:600">ATLAS reference (MD)</div>
+    <div id="viewportWrap" style="position:relative;width:100%;height:600px;
+                                  border:1px solid #ddd;background:white">
+      <div id="viewport" style="width:100%;height:100%"></div>
+      <div id="overlay" style="position:absolute;inset:0;display:flex;
+                               align-items:center;justify-content:center;
+                               background:rgba(255,255,255,0.85);color:#555;
+                               font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace">
+        loading ensemble...
+      </div>
+    </div>
+  </div>
+  <div style="flex:1 1 360px;min-width:0">
+    <div style="padding:4px 0;color:#555;font-weight:600">
+      {% if sample_models %}
+      <select id="modelSel">
+        {% for m in sample_models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select> samples
+      {% else %}model samples{% endif %}
+    </div>
+    <div id="viewportWrap2" style="position:relative;width:100%;height:600px;
+                                   border:1px solid #ddd;background:white">
+      <div id="viewport2" style="width:100%;height:100%"></div>
+      <div id="overlay2" style="position:absolute;inset:0;display:flex;
+                                align-items:center;justify-content:center;text-align:center;
+                                padding:0 12px;
+                                background:rgba(255,255,255,0.85);color:#555;
+                                font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace">
+        {% if sample_models %}loading samples...{% else %}no model samples cached for this chain{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+<div id="player" style="display:flex;gap:8px;align-items:center;margin-top:8px;
+                       font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+  <button id="playBtn" disabled>play</button>
+  <select id="speedSel" disabled>
+    <option value="0.25">0.25x</option>
+    <option value="0.5">0.5x</option>
+    <option value="0.75">0.75x</option>
+    <option value="1" selected>1x</option>
+    <option value="2">2x</option>
+  </select>
+  <input id="frameSlider" type="range" min="0" max="0" value="0"
+         style="flex:1" disabled>
+  <span id="frameLabel" style="min-width:9ch;text-align:right">- / -</span>
+  <label style="display:flex;gap:4px;align-items:center;white-space:nowrap">
+    <input id="smoothChk" type="checkbox" checked disabled>smooth
+  </label>
+  <label style="display:flex;gap:4px;align-items:center;white-space:nowrap"
+         title="Align the model to the reference and link rotate/zoom (paused only)">
+    <input id="syncChk" type="checkbox" checked
+           {% if not sample_models %}disabled{% endif %}>sync
+  </label>
+</div>
+<div id="overlayRow" style="display:flex;gap:14px;align-items:center;
+                            margin-top:8px;flex-wrap:wrap;
+                            font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+  <label><input id="flexChk" type="checkbox" disabled> flexibility</label>
+  <label><input id="contactsChk" type="checkbox" disabled> contacts
+    d&le; <input id="contactsDmax" type="range" min="4" max="15" step="0.5"
+           value="8" style="width:80px;vertical-align:middle" disabled>
+    <span id="contactsDmaxLbl">8.0&Aring;</span>
+    p&ge; <input id="contactsThresh" type="range" min="0.3" max="1.0" step="0.05"
+           value="0.5" style="width:80px;vertical-align:middle" disabled>
+    <span id="contactsThreshLbl">0.50</span></label>
+  <label><input id="ellipsoidsChk" type="checkbox" disabled> ellipsoids
+    <input id="ellipsoidsScale" type="range" min="0.5" max="3" step="0.5"
+           value="1.5" style="width:60px;vertical-align:middle" disabled>x</label>
+  <label><input id="pcaChk" type="checkbox" disabled> PCA mode
+    <select id="pcaMode" disabled>
+      <option value="0" selected>mode 1</option>
+      <option value="1">mode 2</option>
+      <option value="2">mode 3</option>
+    </select></label>
+  <span id="overlayHint" style="color:#777"></span>
+</div>
+{% if sample_models %}
+<div id="metricsPanel" style="margin-top:24px;max-width:780px;border:1px solid #ddd;
+                              border-radius:4px;padding:12px 16px;
+                              font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                              font-size:13px;color:#333">
+  <div style="font-weight:600;color:#555;margin-bottom:8px">
+    Metrics &middot; <span id="metricsModel"></span> vs ATLAS reference
+  </div>
+  <div id="metricsStatus" style="color:#777">select a model to score</div>
+  <table id="metricsTable" style="border-collapse:collapse;width:100%;display:none">
+    <thead>
+      <tr style="text-align:left;color:#777">
+        <th style="padding:3px 12px 3px 0;font-weight:600">metric</th>
+        <th style="padding:3px 12px 3px 0;font-weight:600;text-align:right">this chain</th>
+        <th style="padding:3px 12px 3px 0;font-weight:600;text-align:right"
+            title="mean over the test split for this model (committed results)">test avg</th>
+        <th style="padding:3px 12px 3px 0;font-weight:600;text-align:right"
+            title="mean over the val split for this model (committed results)">val avg</th>
+        <th style="padding:3px 0;font-weight:600">better</th>
+      </tr>
+    </thead>
+    <tbody id="metricsBody"></tbody>
+  </table>
+  <div id="metricsContext" style="margin-top:8px;color:#999;font-size:12px"></div>
+</div>
+{% endif %}
+<div id="metaPanel" style="margin-top:24px;max-width:780px;border:1px solid #ddd;
+                           border-radius:4px;padding:12px 16px;
+                           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                           font-size:13px;color:#333">
+  <div id="metaStatus" style="color:#777">loading structure metadata...</div>
+  <dl id="metaList" style="display:grid;grid-template-columns:max-content 1fr;
+                           gap:4px 14px;margin:0"></dl>
+</div>
+<details open style="margin-top:24px;max-width:780px">
+  <summary style="cursor:pointer;color:#555;font-weight:600;
+                  padding:6px 0;user-select:none">
+    About these widgets
+  </summary>
+  <div style="padding:8px 0 0;font-size:13px;color:#444;line-height:1.55">
+    <p><strong>Player.</strong> The trajectory comes from the ATLAS MD
+    ensemble for this chain (3 replicates × 1000 frames, subsampled to
+    250 evenly for the browser). <em>Play/pause</em>, <em>speed</em>
+    (0.25&ndash;2&times;), and the frame slider all act on the same ensemble.
+    <em>Smooth</em> interpolates between frames with a spline for less
+    jitter (purely visual, no data added).</p>
+
+    <p><strong>Flexibility.</strong> Colors the cartoon by per-residue
+    RMSF (root-mean-square fluctuation) measured across the ensemble.
+    <span style="color:#3060c0">Blue</span> = rigid;
+    <span style="color:#c03030">red</span> = flexible. Tight folded cores
+    and well-formed helices are typically blue; loops and termini are
+    red. Replaces the default rainbow coloring while on.</p>
+
+    <p><strong>Contacts.</strong> Cylinders connect C&alpha; pairs that
+    are within the distance threshold (<code>d&le;</code>) in at least
+    the chosen fraction of frames (<code>p&ge;</code>).
+    <em>Color</em> encodes sequence separation:
+    <span style="color:#d8b020">yellow</span> = near in sequence (i,i+2
+    to i+5; helical / strand-internal),
+    <span style="color:#c01000">red</span> = far in sequence (tertiary
+    contacts crossing the fold). <em>Thickness</em> grows with
+    probability. The distance slider triggers a server recompute on
+    release; the probability slider filters the returned list locally.
+    Lower <code>p</code> to surface transient contacts; raise
+    <code>d</code> to catch looser associations.</p>
+
+    <p><strong>Ellipsoids.</strong> One per C&alpha;, drawn from the
+    eigendecomposition of that residue's 3&times;3 position covariance
+    over the ensemble. <em>Axis lengths</em> are
+    &radic;(eigenvalues); <em>axis directions</em> are the eigenvectors.
+    A long thin ellipsoid means the residue wobbles much more in one
+    direction than the others (anisotropic flexibility);
+    a roundish one means it moves about equally in every direction.
+    Color repeats the flexibility scale, so size and hue both
+    reflect mobility. The <em>scale</em> slider only resizes them for
+    visibility.</p>
+
+    <p><strong>PCA mode.</strong> Pauses the trajectory and instead
+    sweeps the structure along the dominant principal-component
+    eigenvector of the ensemble's C&alpha; covariance, with amplitude
+    set by &radic;(explained variance). Mode&nbsp;1 is the
+    largest concerted backbone motion; modes&nbsp;2 and&nbsp;3 are the
+    next two. Useful for seeing the protein's
+    overall <em>shape</em> of flexibility (e.g., a hinge bend that's
+    smeared across many trajectory frames). Only C&alpha; atoms move;
+    side-chain and other backbone atoms stay at the mean structure.</p>
+
+    <p><strong>Metrics.</strong> The panel below scores the selected
+    model's sample ensemble against the <em>full</em> ATLAS reference
+    (the same v1 panel the leaderboard uses, not just the 250-frame
+    subsample shown in the viewer). <em>RMWD</em> (root-mean Wasserstein
+    distance, Å) is the per-atom 2-Wasserstein between Gaussian
+    approximations of the two ensembles, split into a <em>mean</em>
+    (how far the average positions sit apart) and a <em>variance</em>
+    (how differently they fluctuate) component; lower is closer.
+    <em>RMSF correlation</em> is the Pearson r between per-residue
+    fluctuation profiles (higher is better). <em>MD-PCA W₂</em> is the
+    2-Wasserstein in the reference's top-2 PCA basis (Å, lower better).
+    The <em>contact Jaccards</em> compare which weak / transient CA-CA
+    contacts each ensemble forms (higher is better; "n/a" when the
+    contact set is empty). First load computes server-side and caches.</p>
+
+    <p style="color:#666;margin-bottom:0">All overlays read from the
+    per-chain reference cache
+    (<code>~/.cache/premval/atlas/references/&hellip;.npz</code>).
+    Recompute with <code>premval prepare-refs --chains
+    {{ active_chain }} --overwrite</code>.</p>
+  </div>
+</details>
+<script src="https://unpkg.com/ngl@2.3.1/dist/ngl.js"></script>
+<script>
+  // ===================== premval chain viewer =====================
+  // Two NGL panes: left = ATLAS MD reference, right = a generated model's
+  // sample ensemble (when cached). ONE set of controls drives BOTH panes:
+  //   - playback: play/pause, speed, smooth (spline interpolation), slider
+  //   - overlays: flexibility, contacts, ellipsoids, PCA mode
+  // Each pane computes its overlays from its OWN ensemble's observables, so
+  // the two are directly comparable. A "pane" bundles its stage, structure,
+  // trajectory, player, and overlay state; the shared widgets fan out over
+  // the list of loaded panes.
+
+  // ---- DOM ----
+  const playBtn = document.getElementById("playBtn");
+  const speedSel = document.getElementById("speedSel");
+  const slider = document.getElementById("frameSlider");
+  const label = document.getElementById("frameLabel");
+  const smoothChk = document.getElementById("smoothChk");
+  const flexChk = document.getElementById("flexChk");
+  const contactsChk = document.getElementById("contactsChk");
+  const contactsThresh = document.getElementById("contactsThresh");
+  const contactsThreshLbl = document.getElementById("contactsThreshLbl");
+  const contactsDmax = document.getElementById("contactsDmax");
+  const contactsDmaxLbl = document.getElementById("contactsDmaxLbl");
+  const ellipsoidsChk = document.getElementById("ellipsoidsChk");
+  const ellipsoidsScale = document.getElementById("ellipsoidsScale");
+  const pcaChk = document.getElementById("pcaChk");
+  const pcaMode = document.getElementById("pcaMode");
+  const overlayHint = document.getElementById("overlayHint");
+  const modelSel = document.getElementById("modelSel");   // null if no samples
+  const syncChk = document.getElementById("syncChk");
+  const BASE_TIMEOUT_MS = 80;  // 1x speed
+
+  const panes = [];       // loaded panes (each may still be fetching overlays)
+  let playing = false;
+  let dmaxTimer = null;
+  let stage2 = null;      // sample stage (assigned below if there are samples)
+  let syncBusy = false;   // guards camera-link reentrancy / load cross-talk
+
+  function caPos(structure, ca) {
+    const s = structure.atomStore;
+    return [s.x[ca], s.y[ca], s.z[ca]];
+  }
+  function colorForSeparation(sep) {
+    // |i-j| -> pale yellow (near in sequence) ... red (far / tertiary)
+    const t = Math.min(1, Math.max(0, (sep - 2) / 28));
+    return [1, 0.9 - 0.8 * t, 0.4 - 0.4 * t];
+  }
+  function dmaxNm() { return parseFloat(contactsDmax.value) / 10; }
+
+  // ---- preference persistence (localStorage; survives chain navigation) ----
+  const PREFS_KEY = "premval.chainSettings";
+  const savedPrefs = (() => {
+    try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "null") || {}; }
+    catch (e) { return {}; }
+  })();
+  function persistPrefs() {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({
+        flex: flexChk.checked, contacts: contactsChk.checked,
+        contactsDmax: parseFloat(contactsDmax.value),
+        contactsThresh: parseFloat(contactsThresh.value),
+        ellipsoids: ellipsoidsChk.checked,
+        ellipsoidsScale: parseFloat(ellipsoidsScale.value),
+        pca: pcaChk.checked, pcaMode: pcaMode.value,
+        smooth: smoothChk.checked, speed: speedSel.value,
+        sync: syncChk.checked,
+      }));
+    } catch (e) { /* storage disabled or quota exceeded; skip */ }
+  }
+  for (const el of [flexChk, contactsChk, contactsDmax, contactsThresh,
+                    ellipsoidsChk, ellipsoidsScale, pcaChk, pcaMode,
+                    smoothChk, speedSel, syncChk]) {
+    el.addEventListener("change", persistPrefs);
+    if (el.type === "range") el.addEventListener("input", persistPrefs);
+  }
+
+  // ---- restore widget VALUES up front so panes inherit them on load ----
+  if (savedPrefs.speed !== undefined) speedSel.value = savedPrefs.speed;
+  if (savedPrefs.smooth !== undefined) smoothChk.checked = savedPrefs.smooth;
+  if (savedPrefs.sync !== undefined && !syncChk.disabled) syncChk.checked = savedPrefs.sync;
+  if (savedPrefs.contactsThresh !== undefined) contactsThresh.value = savedPrefs.contactsThresh;
+  if (savedPrefs.contactsDmax !== undefined) contactsDmax.value = savedPrefs.contactsDmax;
+  if (savedPrefs.ellipsoidsScale !== undefined) ellipsoidsScale.value = savedPrefs.ellipsoidsScale;
+  if (savedPrefs.pcaMode !== undefined) pcaMode.value = savedPrefs.pcaMode;
+  contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
+  contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
+
+  // ============================== pane ==============================
+  function makePane(stage, structureUrl, observablesUrl, overlayEl, isReference) {
+    const pane = {
+      stage, observablesUrl, overlayEl, isReference,
+      comp: null, traj: null, player: null, cartoonRep: null,
+      obs: null, flexRep: null, contactsList: null, contactsComp: null,
+      ellipsoidsComp: null, rmin: 0, rmax: 1, pcaRaf: null,
+      contactsRebuildScheduled: false, ellipsoidsRebuildScheduled: false,
+      dmaxFetchSeq: 0,
+    };
+
+    pane.applyPlayerParams = function () {
+      if (!pane.player) return;
+      pane.player.setParameters({
+        timeout: BASE_TIMEOUT_MS / parseFloat(speedSel.value),
+        interpolateType: smoothChk.checked ? "spline" : "",
+      });
+    };
+    pane.setFrame = function (f) {
+      if (pane.traj && f < pane.traj.frameCount) pane.traj.setFrame(f);
+    };
+    pane.setFlex = function (on) {
+      if (!pane.flexRep) return;
+      pane.flexRep.setVisibility(on);
+      pane.cartoonRep.setVisibility(!on);
+    };
+
+    pane.rebuildContacts = function () {
+      if (pane.contactsComp) { pane.stage.removeComponent(pane.contactsComp); pane.contactsComp = null; }
+      if (!contactsChk.checked || !pane.obs) return;
+      const thr = parseFloat(contactsThresh.value);
+      const shape = new NGL.Shape("contacts");
+      let count = 0;
+      for (const ct of pane.contactsList) {        // sorted desc by prob
+        if (ct.p < thr) break;
+        shape.addCylinder(caPos(pane.comp.structure, pane.obs.ca_indices[ct.i]),
+                          caPos(pane.comp.structure, pane.obs.ca_indices[ct.j]),
+                          colorForSeparation(ct.j - ct.i), 0.1 + 0.3 * ct.p);
+        count++;
+      }
+      if (count === 0) return;
+      pane.contactsComp = pane.stage.addComponentFromObject(shape);
+      pane.contactsComp.addRepresentation("buffer");
+    };
+    pane.refetchContacts = function () {
+      if (!pane.obs) return;                       // recompute prob matrix at new dmax
+      const seq = ++pane.dmaxFetchSeq;
+      fetch(pane.observablesUrl + "?dmax_nm=" + dmaxNm())
+        .then(r => r.json()).then(o => {
+          if (seq !== pane.dmaxFetchSeq) return;    // superseded by a newer drag
+          pane.contactsList = o.contacts;
+          if (contactsChk.checked) pane.rebuildContacts();
+        }).catch(e => console.warn("contacts refetch failed:", e));
+    };
+
+    pane.rebuildEllipsoids = function () {
+      if (pane.ellipsoidsComp) { pane.stage.removeComponent(pane.ellipsoidsComp); pane.ellipsoidsComp = null; }
+      if (!ellipsoidsChk.checked || !pane.obs) return;
+      const scale = parseFloat(ellipsoidsScale.value) * 10;  // nm -> A
+      const shape = new NGL.Shape("ellipsoids");
+      const o = pane.obs;
+      for (let r = 0; r < o.n_residues; r++) {
+        const e = o.ellipsoids[r];
+        const pos = caPos(pane.comp.structure, e.ca);
+        const t = (o.rmsf[r] - pane.rmin) / Math.max(pane.rmax - pane.rmin, 1e-6);
+        const color = [t, 0.3, 1 - t];
+        const major = [e.axes[0][0]*e.lengths[0]*scale, e.axes[0][1]*e.lengths[0]*scale, e.axes[0][2]*e.lengths[0]*scale];
+        const minor = [e.axes[1][0]*e.lengths[1]*scale, e.axes[1][1]*e.lengths[1]*scale, e.axes[1][2]*e.lengths[1]*scale];
+        shape.addEllipsoid(pos, color, e.lengths[2]*scale, major, minor);
+      }
+      pane.ellipsoidsComp = pane.stage.addComponentFromObject(shape);
+      pane.ellipsoidsComp.addRepresentation("buffer");
+    };
+
+    // Contacts/ellipsoids are built from current CA positions; rebuild as
+    // they move during playback/PCA. Coalesce via rAF so rapid frameChanged
+    // signals trigger one rebuild per repaint.
+    pane.scheduleContactsRebuild = function () {
+      if (!contactsChk.checked || pane.contactsRebuildScheduled) return;
+      pane.contactsRebuildScheduled = true;
+      requestAnimationFrame(() => { pane.contactsRebuildScheduled = false; if (contactsChk.checked) pane.rebuildContacts(); });
+    };
+    pane.scheduleEllipsoidsRebuild = function () {
+      if (!ellipsoidsChk.checked || pane.ellipsoidsRebuildScheduled) return;
+      pane.ellipsoidsRebuildScheduled = true;
+      requestAnimationFrame(() => { pane.ellipsoidsRebuildScheduled = false; if (ellipsoidsChk.checked) pane.rebuildEllipsoids(); });
+    };
+
+    pane.pcaOn = function () {
+      if (!pane.obs) return;
+      if (pane.pcaRaf !== null) cancelAnimationFrame(pane.pcaRaf);
+      const start = performance.now();
+      const o = pane.obs;
+      const atomStore = pane.comp.structure.atomStore;
+      const tick = () => {
+        if (!pcaChk.checked) return;
+        const m = o.pca.modes[parseInt(pcaMode.value, 10)];
+        const tt = (performance.now() - start) / 1500;   // 1.5s period
+        const s = m.amplitude * Math.sin(2 * Math.PI * tt);
+        for (let r = 0; r < o.n_residues; r++) {
+          const ca = o.ca_indices[r];
+          atomStore.x[ca] = (o.pca.mean[3*r]   + s*m.vec[3*r])   * 10;
+          atomStore.y[ca] = (o.pca.mean[3*r+1] + s*m.vec[3*r+1]) * 10;
+          atomStore.z[ca] = (o.pca.mean[3*r+2] + s*m.vec[3*r+2]) * 10;
+        }
+        pane.comp.updateRepresentations({position: true});
+        pane.scheduleContactsRebuild();
+        pane.scheduleEllipsoidsRebuild();
+        pane.pcaRaf = requestAnimationFrame(tick);
+      };
+      tick();
+    };
+    pane.pcaOff = function () {
+      if (pane.pcaRaf !== null) { cancelAnimationFrame(pane.pcaRaf); pane.pcaRaf = null; }
+      if (pane.traj) pane.traj.setFrame(pane.traj.currentFrame);  // restore CA from frame
+    };
+
+    pane.attachOverlays = function (obs) {
+      pane.obs = obs;
+      pane.contactsList = obs.contacts;
+      const structure = pane.comp.structure;
+      const atomStore = structure.atomStore;
+      // flexibility: per-atom bfactor = residue RMSF, cartoon colored by it
+      const resBf = new Float32Array(structure.residueStore.count);
+      let rmin = Infinity, rmax = -Infinity;
+      for (let r = 0; r < obs.n_residues; r++) {
+        resBf[atomStore.residueIndex[obs.ca_indices[r]]] = obs.rmsf[r];
+        if (obs.rmsf[r] < rmin) rmin = obs.rmsf[r];
+        if (obs.rmsf[r] > rmax) rmax = obs.rmsf[r];
+      }
+      for (let a = 0; a < atomStore.count; a++) atomStore.bfactor[a] = resBf[atomStore.residueIndex[a]];
+      pane.rmin = rmin; pane.rmax = rmax;
+      pane.flexRep = pane.comp.addRepresentation("cartoon", {
+        visible: false, colorScheme: "bfactor", colorScale: "RdBu",
+        colorReverse: true, colorDomain: [rmin, rmax],
+      });
+      // sync this pane to the current widget state (toggles may already be on)
+      if (flexChk.checked) pane.setFlex(true);
+      if (contactsChk.checked) pane.rebuildContacts();
+      if (ellipsoidsChk.checked) pane.rebuildEllipsoids();
+      if (pcaChk.checked) setPcaMode(true);
+    };
+
+    // ---- load the structure ----
+    overlayEl.style.display = "flex";
+    overlayEl.style.color = "#555";
+    overlayEl.textContent = "loading...";
+    stage.loadFile(structureUrl, {ext: "pdb", asTrajectory: true}).then(c => {
+      pane.comp = c;
+      pane.cartoonRep = c.addRepresentation("cartoon");
+      withSyncBusy(() => c.autoView());
+      pane.traj = c.addTrajectory().trajectory;
+      pane.player = new NGL.TrajectoryPlayer(pane.traj, {
+        step: 1, timeout: BASE_TIMEOUT_MS, mode: "loop", direction: "forward",
+        interpolateType: "spline", interpolateStep: 5,
+      });
+      pane.applyPlayerParams();
+      pane.traj.signals.frameChanged.add(() => { pane.scheduleContactsRebuild(); pane.scheduleEllipsoidsRebuild(); });
+      if (isReference) {
+        const update = () => {
+          slider.max = pane.traj.frameCount - 1;
+          slider.value = pane.traj.currentFrame;
+          label.textContent = (pane.traj.currentFrame + 1) + " / " + pane.traj.frameCount;
+        };
+        pane.traj.signals.frameChanged.add(update);
+        pane.traj.signals.countChanged.add(update);
+        update();
+        playBtn.disabled = false; slider.disabled = false;
+        speedSel.disabled = false; smoothChk.disabled = false;
+      } else {
+        pane.setFrame(parseInt(slider.value, 10) || 0);
+        if (playing) pane.player.play();
+      }
+      overlayEl.style.display = "none";
+      fetchOverlays(pane);
+      matchSampleCamera();   // align cameras once structures are in view
+    }).catch(err => {
+      overlayEl.textContent = "load failed: " + err;
+      overlayEl.style.color = "#b00";
+      console.error(err);
+    });
+
+    panes.push(pane);
+    return pane;
+  }
+
+  function fetchOverlays(pane) {
+    overlayHint.textContent = "loading overlay data...";
+    overlayHint.style.color = "#777";
+    // First request computes references server-side (PCA + covariance +
+    // contact probs); can take 5-30s. Escalate the message at 2s.
+    const escalate = setTimeout(() => {
+      overlayHint.textContent = "computing observables (first request, ~5-30s)...";
+    }, 2000);
+    fetch(pane.observablesUrl + "?dmax_nm=" + dmaxNm()).then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(obs => {
+      clearTimeout(escalate);
+      overlayHint.textContent = "";
+      pane.attachOverlays(obs);
+      enableOverlayControls();
+    }).catch(err => {
+      clearTimeout(escalate);
+      overlayHint.textContent = "overlay data unavailable: " + err.message;
+      overlayHint.style.color = "#b00";
+      console.warn("observables fetch failed:", err);
+    });
+  }
+
+  // ---- enable overlay widgets once any pane has observables ----
+  let overlayControlsEnabled = false;
+  function enableOverlayControls() {
+    if (overlayControlsEnabled) return;
+    overlayControlsEnabled = true;
+    for (const el of [flexChk, contactsChk, contactsThresh, contactsDmax,
+                      ellipsoidsChk, ellipsoidsScale, pcaChk, pcaMode]) {
+      el.disabled = false;
+    }
+    // Apply restored toggle states (panes that are already loaded sync now;
+    // panes still loading sync in their own attachOverlays).
+    if (savedPrefs.flex) { flexChk.checked = true; flexChk.onchange(); }
+    if (savedPrefs.contacts) { contactsChk.checked = true; contactsChk.onchange(); }
+    if (savedPrefs.ellipsoids) { ellipsoidsChk.checked = true; ellipsoidsChk.onchange(); }
+    if (savedPrefs.pca) { pcaChk.checked = true; pcaChk.onchange(); }
+  }
+
+  // ---- overlay widgets: fan out to every loaded pane ----
+  flexChk.onchange = () => panes.forEach(p => p.setFlex(flexChk.checked));
+  contactsChk.onchange = () => panes.forEach(p => p.rebuildContacts());
+  contactsThresh.oninput = () => {
+    contactsThreshLbl.textContent = parseFloat(contactsThresh.value).toFixed(2);
+    if (contactsChk.checked) panes.forEach(p => p.rebuildContacts());
+  };
+  contactsDmax.oninput = () => {
+    contactsDmaxLbl.textContent = parseFloat(contactsDmax.value).toFixed(1) + "Å";
+    if (dmaxTimer) clearTimeout(dmaxTimer);
+    dmaxTimer = setTimeout(() => panes.forEach(p => p.refetchContacts()), 250);
+  };
+  ellipsoidsChk.onchange = () => panes.forEach(p => p.rebuildEllipsoids());
+  ellipsoidsScale.oninput = () => { if (ellipsoidsChk.checked) panes.forEach(p => p.rebuildEllipsoids()); };
+  function setPcaMode(on) {
+    if (on) {
+      if (playing) { playing = false; playBtn.textContent = "play"; panes.forEach(p => p.player && p.player.pause()); }
+      // Reset to frame 1 so the trajectory doesn't snap to a random frame
+      // when PCA mode is toggled off.
+      panes.forEach(p => p.setFrame(0));
+      playBtn.disabled = true; slider.disabled = true;
+      panes.forEach(p => p.pcaOn());
+    } else {
+      panes.forEach(p => p.pcaOff());
+      playBtn.disabled = false; slider.disabled = false;
+    }
+  }
+  pcaChk.onchange = () => setPcaMode(pcaChk.checked);
+  pcaMode.onchange = () => { if (pcaChk.checked) panes.forEach(p => { p.pcaOff(); p.pcaOn(); }); };
+
+  // ---- playback widgets: drive every pane's player ----
+  playBtn.onclick = () => {
+    playing = !playing;
+    playBtn.textContent = playing ? "pause" : "play";
+    panes.forEach(p => { if (p.player) playing ? p.player.play() : p.player.pause(); });
+  };
+  speedSel.onchange = () => panes.forEach(p => p.applyPlayerParams());
+  smoothChk.onchange = () => panes.forEach(p => p.applyPlayerParams());
+  slider.oninput = () => {
+    if (playing) { playing = false; playBtn.textContent = "play"; panes.forEach(p => p.player && p.player.pause()); }
+    const f = parseInt(slider.value, 10);
+    panes.forEach(p => p.setFrame(f));
+  };
+
+  // ---- view synchronization (camera link) ----
+  // The model is already rigid-body aligned to the reference server-side
+  // (frame 0 anchored to the reference, each later frame to the previous), so
+  // the structures share an orientation with no client-side superposition and
+  // no per-frame work. The "sync" checkbox links the *camera*: rotating or
+  // zooming either pane mirrors to the other. Camera mirroring is suspended
+  // during playback (per spec). `syncBusy` guards link reentrancy and
+  // suppresses cross-talk from the programmatic autoView during (re)loads.
+  function withSyncBusy(fn) { const prev = syncBusy; syncBusy = true; try { fn(); } finally { syncBusy = prev; } }
+  function matchSampleCamera() {
+    if (!syncChk.checked || !stage2) return;
+    withSyncBusy(() => stage2.viewerControls.orient(stage.viewerControls.getOrientation()));
+  }
+  function linkCameras() {
+    const link = (src, dst) => src.viewerControls.signals.changed.add(() => {
+      if (!syncChk.checked || playing || syncBusy) return;
+      withSyncBusy(() => dst.viewerControls.orient(src.viewerControls.getOrientation()));
+    });
+    link(stage, stage2);
+    link(stage2, stage);
+  }
+  syncChk.onchange = () => matchSampleCamera();
+
+  // ---- create the reference pane ----
+  const stage = new NGL.Stage("viewport", {backgroundColor: "white"});
+  addEventListener("resize", () => stage.handleResize());
+  makePane(stage, {{ ensemble_url | tojson }},
+           "/api/chain/{{ active_chain }}/observables.json",
+           document.getElementById("overlay"), true);
+
+  // ---- create the sample pane (right), with a model picker ----
+  if (modelSel) {
+    stage2 = new NGL.Stage("viewport2", {backgroundColor: "white"});
+    addEventListener("resize", () => stage2.handleResize());
+    linkCameras();
+    const overlay2 = document.getElementById("overlay2");
+    let samplePane = null;
+    function loadSampleModel(model) {
+      if (samplePane) {
+        if (samplePane.player) samplePane.player.stop();
+        if (samplePane.pcaRaf !== null) cancelAnimationFrame(samplePane.pcaRaf);
+        const i = panes.indexOf(samplePane);
+        if (i >= 0) panes.splice(i, 1);
+        stage2.removeAllComponents();
+      }
+      samplePane = makePane(stage2,
+        "/api/chain/{{ active_chain }}/sample/" + model + ".pdb",
+        "/api/chain/{{ active_chain }}/sample/" + model + "/observables.json",
+        overlay2, false);
+      loadMetrics(model);
+    }
+    modelSel.addEventListener("change", () => loadSampleModel(modelSel.value));
+    loadSampleModel(modelSel.value);
+  }
+
+  // ---- metric panel (sample vs full ATLAS reference; mirrors leaderboard) ----
+  // Each row: [json key, label, value formatter, "better" direction]. The
+  // emd_* rows are the translation/fluctuation components RMWD combines.
+  const fmtA = v => v.toFixed(2) + " Å";
+  const METRIC_ROWS = [
+    ["rmwd", "RMWD", fmtA, "lower"],
+    ["emd_mean_rms", " ↳ mean (translation)", fmtA, "lower"],
+    ["emd_var_rms", " ↳ variance (fluctuation)", fmtA, "lower"],
+    ["rmsf_pearson", "RMSF correlation", v => v.toFixed(3), "higher"],
+    ["md_pca_w2", "MD-PCA W₂", fmtA, "lower"],
+    ["weak_contacts_jaccard", "Weak contacts (Jaccard)", v => v.toFixed(3), "higher"],
+    ["transient_contacts_jaccard", "Transient contacts (Jaccard)", v => v.toFixed(3), "higher"],
+  ];
+  function loadMetrics(model) {
+    const panel = document.getElementById("metricsPanel");
+    if (!panel) return;
+    const status = document.getElementById("metricsStatus");
+    const table = document.getElementById("metricsTable");
+    const body = document.getElementById("metricsBody");
+    document.getElementById("metricsModel").textContent = model;
+    table.style.display = "none";
+    status.style.display = "";
+    status.style.color = "#777";
+    status.textContent = "scoring (first request loads the full reference, ~5-30s)...";
+    fetch("/api/chain/{{ active_chain }}/sample/" + model + "/metrics.json").then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(m => {
+      body.replaceChildren();
+      const avg = m.averages || {};
+      // null/undefined -> "n/a"; the split-average dicts may omit a metric.
+      const fmtFrom = (src, key, fmt) => {
+        const v = src ? src[key] : undefined;
+        return (v === null || v === undefined) ? "n/a" : fmt(v);
+      };
+      const numCss = "padding:3px 12px 3px 0;text-align:right";
+      for (const [key, lbl, fmt, better] of METRIC_ROWS) {
+        const tr = document.createElement("tr");
+        tr.style.borderTop = "1px solid #eee";
+        const cells = [
+          [lbl, "padding:3px 12px 3px 0"],
+          [fmtFrom(m, key, fmt), numCss],
+          [fmtFrom(avg.test, key, fmt), numCss + ";color:#777"],
+          [fmtFrom(avg.val, key, fmt), numCss + ";color:#777"],
+          [better, "padding:3px 0;color:#999"],
+        ];
+        for (const [text, css] of cells) {
+          const td = document.createElement("td");
+          td.style.cssText = css;
+          td.textContent = text;
+          tr.append(td);
+        }
+        body.append(tr);
+      }
+      status.style.display = "none";
+      table.style.display = "";
+      const splitNote = s => (avg[s] ? avg[s].n_chains + " " + s + " chains" : "no " + s + " results");
+      document.getElementById("metricsContext").textContent =
+        "this chain: " + m.n_residues + " residues · " + m.n_ref_frames +
+        " reference frames · " + m.n_sub_frames + " sample frames — averages over " +
+        splitNote("test") + ", " + splitNote("val");
+    }).catch(err => {
+      document.getElementById("metricsContext").textContent = "";
+      status.textContent = "metrics unavailable: " + err.message;
+      status.style.color = "#b00";
+      console.warn("metrics fetch failed:", err);
+    });
+  }
+
+  // ---- structure metadata (RCSB entry record for the chain's parent PDB) ----
+  (function loadMetadata() {
+    const status = document.getElementById("metaStatus");
+    const list = document.getElementById("metaList");
+    const addRow = (label, node) => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      dt.style.color = "#777";
+      const dd = document.createElement("dd");
+      dd.style.margin = "0";
+      dd.append(node);
+      list.append(dt, dd);
+    };
+    const link = (text, href) => {
+      const a = document.createElement("a");
+      a.textContent = text; a.href = href; a.target = "_blank"; a.rel = "noopener";
+      return a;
+    };
+    fetch("/api/chain/{{ active_chain }}/metadata.json").then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(m => {
+      status.style.display = "none";
+      if (m.title) addRow("Title", document.createTextNode(m.title));
+      addRow("PDB", link(m.pdb_id.toUpperCase(), m.url));
+      if (m.method) addRow("Method", document.createTextNode(m.method));
+      if (m.resolution_a != null)
+        addRow("Resolution", document.createTextNode(m.resolution_a.toFixed(2) + " Å"));
+      if (m.molecular_weight_kda != null)
+        addRow("Mol. weight", document.createTextNode(m.molecular_weight_kda.toFixed(1) + " kDa"));
+      if (m.keywords) addRow("Keywords", document.createTextNode(m.keywords));
+      if (m.deposit_date) addRow("Deposited", document.createTextNode(m.deposit_date));
+      if (m.release_date) addRow("Released", document.createTextNode(m.release_date));
+      if (m.citation_title) {
+        const cite = document.createElement("span");
+        cite.append(document.createTextNode(m.citation_title));
+        const bits = [];
+        if (m.citation_journal) bits.push(m.citation_journal);
+        if (m.citation_year) bits.push(m.citation_year);
+        if (bits.length) cite.append(" (" + bits.join(" ") + ")");
+        if (m.citation_doi) { cite.append(" "); cite.append(link("doi", "https://doi.org/" + m.citation_doi)); }
+        if (m.citation_authors && m.citation_authors.length) {
+          const auth = document.createElement("div");
+          auth.style.color = "#777";
+          auth.textContent = m.citation_authors.join(", ");
+          cite.append(auth);
+        }
+        addRow("Citation", cite);
+      }
+    }).catch(err => {
+      status.textContent = "structure metadata unavailable: " + err.message;
+      status.style.color = "#b00";
+      console.warn("metadata fetch failed:", err);
+    });
+  })();
+</script>
+{% endblock %}

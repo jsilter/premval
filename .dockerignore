@@ -1,0 +1,31 @@
+# Only the package source, pyproject, and committed results are needed to build
+# the web image. Everything else (data, caches, secrets, dev cruft) stays out.
+.git
+.github
+.venv
+.env
+*.lock
+poetry.lock
+
+# Local data and caches (served from the Fly volume instead, never the image).
+data
+inference
+logs
+plans
+.cache
+
+# Test / type / lint caches and coverage.
+tests
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+htmlcov
+
+# Editor / OS noise and bytecode.
+.idea
+.vscode
+__pycache__
+*.py[cod]
+.DS_Store
