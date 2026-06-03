@@ -1,8 +1,15 @@
-# Web image for the premval leaderboard (FastAPI + NGL chain viewer).
+# Portable container image for the premval dashboard (FastAPI + NGL chain viewer).
 #
-# Trajectory data is NOT baked into the image; it lives on a Fly volume mounted
-# at /data and is populated separately by scripts/upload-data.sh. See
-# scripts/deploy-fly.sh for the full flow.
+# The canonical hosted deployment is Modal (see inference/web_modal.py); this
+# image runs the same `premval.web.app:create_app` on any host, or locally:
+#
+#   docker build -t premval-web .
+#   docker run -p 8080:8080 -v ~/.cache/premval:/data premval-web
+#
+# Trajectory data is NOT baked in: mount the premval cache (the `atlas/` and
+# `samples/` trees, with their precomputed reference and viewer caches) at /data.
+# With a writable volume the app also lazily computes and writes any missing
+# observables / metrics / view PDBs on first request.
 
 FROM python:3.12-slim
 

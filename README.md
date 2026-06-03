@@ -12,12 +12,14 @@ systems, with its own metrics; there is no neutral cross-model comparison.
 PREMVAL is that comparison: one metric panel, one submission format, one
 reference dataset, applied identically to every model.
 
-Its differentiator is **per-model contamination labels**. AlphaFlow-MD trains
-directly on ATLAS; Str2Str never sees it; BioEmu and ESMDiff are uncertain.
-Models that train on ATLAS score better partly because ATLAS is in their
-training set, and no individual paper surfaces this. PREMVAL tags every model
-`in_distribution` / `test` / `uncertain` so the leaderboard is read with that
-context, not without it.
+Its differentiator is **per-model held-out labels**. AlphaFlow-MD and ESMFlow-MD
+fine-tune on the ATLAS train split and are scored on the held-out test split, but
+that split is temporal only (no sequence-homology filter), so the guarantee is
+weak; BioEmu never trains on ATLAS at all; ESMDiff's training relationship to
+ATLAS is unclear. Models trained on ATLAS can score better partly because the
+test split resembles their training data, and no individual paper surfaces this.
+PREMVAL tags every model `held_out` / `weak_holdout` / `uncertain` so the
+leaderboard is read with that context, not without it.
 
 The scoring library is **CPU-only and free of GPU dependencies**: it ingests
 already-generated ensembles (downloaded or produced by the GPU harnesses in
@@ -25,15 +27,18 @@ already-generated ensembles (downloaded or produced by the GPU harnesses in
 
 ## Models & contamination labels
 
-Every evaluated model is tagged with how its training data relates to ATLAS,
-because a model that trained on ATLAS holds an advantage that raw scores hide:
+Every evaluated model is tagged by how strong its held-out guarantee is on the
+ATLAS evaluation, because a model whose test data resembles its training set
+holds an advantage that raw scores hide:
 
-- **`in_distribution`** — trained or fine-tuned on the ATLAS MD train split.
-  Scores are optimistic; read them as an upper bound, not held-out
-  generalization.
-- **`test`** — never trained on ATLAS or MD data (PDB-only or zero-shot). A
-  genuine held-out evaluation.
-- **`uncertain`** — the training corpus's relationship to ATLAS is not
+- **`held_out`** (green) — never trained on ATLAS or MD data (PDB-only,
+  zero-shot, or training filtered away from the test proteins). A genuine
+  held-out evaluation.
+- **`weak_holdout`** (amber) — fine-tuned on the ATLAS *train* split and scored
+  on the held-out *test* split, but the split is temporal only (no
+  sequence-homology filter), so test homologs may resemble training data. A real
+  but weak held-out guarantee; read these scores with that caveat.
+- **`uncertain`** (grey) — the training corpus's relationship to ATLAS is not
   established (a broad MD/structure corpus, or a fine-tune of a model whose
   pretraining overlap is unclear).
 
@@ -41,15 +46,17 @@ Models currently on the leaderboard:
 
 | Model | What it is | Label |
 |-------|------------|-------|
-| [AlphaFlow-MD](https://arxiv.org/abs/2402.04845) (base, distilled) | AlphaFold2 fine-tuned with flow matching on ATLAS MD (Jing et al., ICML 2024) | `in_distribution` |
-| [ESMFlow-MD](https://arxiv.org/abs/2402.04845) (base, distilled) | ESMFold fine-tuned with flow matching on ATLAS MD (Jing et al., ICML 2024) | `in_distribution` |
-| [BioEmu](https://doi.org/10.1101/2024.12.05.626885) | Equilibrium-ensemble emulator trained on a broad MD/structure/stability corpus (Lewis et al., 2024) | `uncertain` |
+| [AlphaFlow-MD](https://arxiv.org/abs/2402.04845) (base, distilled) | AlphaFold2 fine-tuned with flow matching on ATLAS MD (Jing et al., ICML 2024) | `weak_holdout` |
+| [ESMFlow-MD](https://arxiv.org/abs/2402.04845) (base, distilled) | ESMFold fine-tuned with flow matching on ATLAS MD (Jing et al., ICML 2024) | `weak_holdout` |
+| [BioEmu](https://doi.org/10.1101/2024.12.05.626885) | Equilibrium-ensemble emulator; not trained on ATLAS, training filtered to <40% sequence identity to test proteins (Lewis et al., 2024) | `held_out` |
 | [ESMDiff](https://arxiv.org/abs/2410.18403) | ESM3 fine-tuned with masked diffusion over discrete structure tokens (Lu et al., ICLR 2025) | `uncertain` |
 
-Per-model evidence for each label is in
-[`data/contamination_labels.yaml`](data/contamination_labels.yaml); additional
-run-yourself models (Str2Str, ConfDiff, the PDB-trained flow variants) are wired
-up in [`inference/`](inference/).
+The leaderboard's badge labels are defined in
+[`src/premval/models.py`](src/premval/models.py); per-model evidence and labels
+for additional run-yourself models (Str2Str, ConfDiff, the PDB-trained flow
+variants, which are `held_out`) are recorded in
+[`data/contamination_labels.yaml`](data/contamination_labels.yaml) and wired up
+in [`inference/`](inference/).
 
 ## The metric panel
 
@@ -119,7 +126,7 @@ premval serve --port 8000
 | `inference/`          | Run-yourself GPU harnesses for models PREMVAL can't just download (see its [README](inference/README.md)) |
 | `results/`            | Committed per-model scores (`{model}.json`); the leaderboard reads these |
 | `data/`               | ATLAS split lists and `contamination_labels.yaml`                   |
-| `modal_app.py`        | Deploys the dashboard as a Modal ASGI app                           |
+| `inference/web_modal.py` | Deploys the dashboard as a Modal ASGI app (the live `premval--web.modal.run`) |
 | `tests/`              | Pytest suite (run before every change)                              |
 
 The dependency arrow only points one way: `inference/` imports `premval`, never

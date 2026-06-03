@@ -1,52 +1,58 @@
-# Per-model ATLAS contamination labels for the leaderboard badge.
+# Per-model ATLAS held-out labels for the leaderboard badge.
 #
 # Schema: model_key -> dataset -> {status, basis}
-#   status: in_distribution | test | uncertain
+#   status: held_out | weak_holdout | uncertain
+#     held_out     - never trained on ATLAS/MD (PDB-only, zero-shot, or filtered
+#                    away from the test proteins); a genuine held-out evaluation.
+#     weak_holdout - fine-tuned on the ATLAS train split and scored on the
+#                    held-out test split, but the split is temporal only (no
+#                    sequence-homology filter), so the guarantee is weak.
+#     uncertain    - training corpus's relationship to ATLAS is not established.
 #   basis:  one-line evidence for the label
 #
-# model_key matches the samples-cache directory name (and the results/
-# JSON filename) so the leaderboard can join labels to scores directly.
-# The basis field records the evidence behind each call.
+# The leaderboard renders labels from src/premval/models.py; this file records
+# the evidence (including run-yourself models not yet scored). model_key matches
+# the samples-cache directory name (and the results/ JSON filename).
 
 alphaflow_md_base:
-  atlas: {status: in_distribution, basis: "AlphaFlow-MD fine-tuned on the ATLAS train split"}
+  atlas: {status: weak_holdout, basis: "AlphaFlow-MD fine-tuned on the ATLAS train split; scored on the temporal-only test split"}
 
 esmflow_md_base:
-  atlas: {status: in_distribution, basis: "ESMFlow-MD fine-tuned on the ATLAS train split"}
+  atlas: {status: weak_holdout, basis: "ESMFlow-MD fine-tuned on the ATLAS train split; scored on the temporal-only test split"}
 
 alphaflow_pdb_base:
-  atlas: {status: test, basis: "PDB-trained only; ATLAS MD not in training"}
+  atlas: {status: held_out, basis: "PDB-trained only; ATLAS MD not in training"}
 
 esmflow_pdb_base:
-  atlas: {status: test, basis: "PDB-trained only; ATLAS MD not in training"}
+  atlas: {status: held_out, basis: "PDB-trained only; ATLAS MD not in training"}
 
 eba:
-  atlas: {status: in_distribution, basis: "EBA fine-tunes a Protenix base on the ATLAS panel"}
+  atlas: {status: weak_holdout, basis: "EBA fine-tunes a Protenix base on the ATLAS panel"}
 
 # Self-run models (Phase 2) — labels set here so scores wire in on arrival.
 bioemu:
-  atlas: {status: uncertain, basis: "broad MD+AFDB+stability corpus; ATLAS overlap unclear"}
+  atlas: {status: held_out, basis: "Not trained on ATLAS; training filtered to <40% sequence identity to test proteins (Lewis et al., 2024)"}
 
 str2str:
-  atlas: {status: test, basis: "zero-shot PDB sampler; no MD/ATLAS in training"}
+  atlas: {status: held_out, basis: "zero-shot PDB sampler; no MD/ATLAS in training"}
 
 esmdiff:
   atlas: {status: uncertain, basis: "fine-tunes gated ESM3; ATLAS not in ESMDiff training, ESM3 pretraining overlap unclear"}
 
 confdiff:
-  atlas: {status: test, basis: "ConfDiff-BASE is ESMFold/PDB-trained; ATLAS MD not in training (METHODS.md ConfDiff)"}
+  atlas: {status: held_out, basis: "ConfDiff-BASE is ESMFold/PDB-trained; ATLAS MD not in training (METHODS.md ConfDiff)"}
 
 confdiff_md:
-  atlas: {status: in_distribution, basis: "ConfDiff-MD (-MD checkpoint) fine-tuned on ATLAS (METHODS.md ConfDiff)"}
+  atlas: {status: weak_holdout, basis: "ConfDiff-MD (-MD checkpoint) fine-tuned on ATLAS (METHODS.md ConfDiff)"}
 
 alphaflow_pdb_distilled:
-  atlas: {status: test, basis: "AlphaFlow PDB-trained distilled; ATLAS MD not in training"}
+  atlas: {status: held_out, basis: "AlphaFlow PDB-trained distilled; ATLAS MD not in training"}
 
 alphaflow_md_distilled:
-  atlas: {status: in_distribution, basis: "AlphaFlow distilled fine-tuned on ATLAS MD"}
+  atlas: {status: weak_holdout, basis: "AlphaFlow distilled fine-tuned on ATLAS MD"}
 
 esmflow_pdb_distilled:
-  atlas: {status: test, basis: "ESMFlow PDB-trained distilled; ATLAS MD not in training"}
+  atlas: {status: held_out, basis: "ESMFlow PDB-trained distilled; ATLAS MD not in training"}
 
 esmflow_md_distilled:
-  atlas: {status: in_distribution, basis: "ESMFlow distilled fine-tuned on ATLAS MD"}
+  atlas: {status: weak_holdout, basis: "ESMFlow distilled fine-tuned on ATLAS MD"}
