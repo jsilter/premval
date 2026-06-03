@@ -1,6 +1,6 @@
 [project]
 name = "premval"
-version = "0.1.0"
+version = "1.0.0"
 description = "Protein ensemble evaluation tooling."
 authors = [
     {name = "Jacob Silterra", email = "603941+jsilter@users.noreply.github.com"}
