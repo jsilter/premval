@@ -9,30 +9,35 @@ a structure calculation.
 Data layout (two Modal Volumes, both read-only at serve time):
 
 - ``premval-cache`` mounted at ``/cache`` holds the contents of
-  ``~/.cache/premval/atlas/``: the ``analysis/{chain}.zip`` reference
-  trajectory bundles the NGL player streams and the precomputed
-  ``references/analysis/{chain}.npz`` observables. Populate it once with::
+  ``~/.cache/premval/atlas/``: the ``analysis/{chain}.zip`` reference bundles
+  (their existence gates the chain endpoints) plus the precomputed
+  ``references/analysis/{chain}.npz`` observables and
+  ``references/analysis/{chain}.view.pdb`` reference playback ensembles. The
+  ``.view.pdb`` is load-bearing: without it ``/ensemble.pdb`` rebuilds the
+  reference per request (extract 3 replica XTCs, load ~3000 frames, subsample,
+  re-serialize) at 18-42 s a hit. ``prepare-refs`` builds both. Populate once::
 
-      premval prepare-refs --chains <all chains>          # build the .npz
+      premval prepare-refs --chains <all chains>   # builds .npz + .view.pdb
       modal volume put premval-cache ~/.cache/premval/atlas/ /
 
-- ``premval-samples`` mounted at ``/samples`` is the same volume the GPU
-  harnesses write generated ensembles to, under ``samples/{model}/{chain}.pdb``.
-  The chain viewer also reads precomputed sidecars from it: the served
-  ``samples/_view/{model}/{chain}.pdb`` playback ensembles and
-  ``samples/_observables/{model}/{chain}.npz`` / ``samples/_metrics/{...}.json``
-  panels. Warm them locally and push them once (the served app does not
-  persist its own volume writes, so leaving them un-warmed means every cold
-  start recomputes on first view)::
+- ``premval-samples`` mounted at ``/samples`` carries only the precomputed
+  viewer sidecars under ``samples/``: ``_view/{model}/{chain}.pdb`` playback
+  ensembles, ``_observables/{model}/{chain}.npz`` and
+  ``_metrics/{model}/{chain}.json`` panels. The multi-GB raw
+  ``samples/{model}/{chain}.pdb`` ensembles are NOT uploaded: the viewer serves
+  the sidecars, and ``available_models``/``available_chains`` discover models
+  from the ``_view`` sidecars, so a model lists and renders without its raw
+  ensemble on the volume. The served app does not persist its own volume
+  writes, so warm the sidecars locally and push them once::
 
-      premval prepare-samples                              # build the sidecars
+      premval prepare-samples                      # build the sidecars
       for d in _observables _metrics _view; do
           modal volume put premval-samples ~/.cache/premval/samples/$d samples/$d
       done
 
-  The ``_aligned`` intermediate is intentionally not uploaded: it is only the
-  source ``_view``/``_observables`` are built from, and the served app reads
-  the cached outputs, never rebuilds from it.
+  The ``_aligned`` intermediate is not uploaded either: it is only the source
+  the ``_view``/``_observables`` sidecars are built from, and the served app
+  reads the cached outputs, never rebuilds from it.
 
 ``results/*.json`` (the committed leaderboard) is tiny, so it is baked into
 the image with the source rather than mounted.

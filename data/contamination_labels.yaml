@@ -1,0 +1,52 @@
+# Per-model ATLAS contamination labels for the leaderboard badge.
+#
+# Schema: model_key -> dataset -> {status, basis}
+#   status: in_distribution | test | uncertain
+#   basis:  one-line evidence for the label
+#
+# model_key matches the samples-cache directory name (and the results/
+# JSON filename) so the leaderboard can join labels to scores directly.
+# The basis field records the evidence behind each call.
+
+alphaflow_md_base:
+  atlas: {status: in_distribution, basis: "AlphaFlow-MD fine-tuned on the ATLAS train split"}
+
+esmflow_md_base:
+  atlas: {status: in_distribution, basis: "ESMFlow-MD fine-tuned on the ATLAS train split"}
+
+alphaflow_pdb_base:
+  atlas: {status: test, basis: "PDB-trained only; ATLAS MD not in training"}
+
+esmflow_pdb_base:
+  atlas: {status: test, basis: "PDB-trained only; ATLAS MD not in training"}
+
+eba:
+  atlas: {status: in_distribution, basis: "EBA fine-tunes a Protenix base on the ATLAS panel"}
+
+# Self-run models (Phase 2) — labels set here so scores wire in on arrival.
+bioemu:
+  atlas: {status: uncertain, basis: "broad MD+AFDB+stability corpus; ATLAS overlap unclear"}
+
+str2str:
+  atlas: {status: test, basis: "zero-shot PDB sampler; no MD/ATLAS in training"}
+
+esmdiff:
+  atlas: {status: uncertain, basis: "fine-tunes gated ESM3; ATLAS not in ESMDiff training, ESM3 pretraining overlap unclear"}
+
+confdiff:
+  atlas: {status: test, basis: "ConfDiff-BASE is ESMFold/PDB-trained; ATLAS MD not in training (METHODS.md ConfDiff)"}
+
+confdiff_md:
+  atlas: {status: in_distribution, basis: "ConfDiff-MD (-MD checkpoint) fine-tuned on ATLAS (METHODS.md ConfDiff)"}
+
+alphaflow_pdb_distilled:
+  atlas: {status: test, basis: "AlphaFlow PDB-trained distilled; ATLAS MD not in training"}
+
+alphaflow_md_distilled:
+  atlas: {status: in_distribution, basis: "AlphaFlow distilled fine-tuned on ATLAS MD"}
+
+esmflow_pdb_distilled:
+  atlas: {status: test, basis: "ESMFlow PDB-trained distilled; ATLAS MD not in training"}
+
+esmflow_md_distilled:
+  atlas: {status: in_distribution, basis: "ESMFlow distilled fine-tuned on ATLAS MD"}
